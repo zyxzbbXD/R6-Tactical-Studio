@@ -1,0 +1,223 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+/* ── Dark theme (default) ─────────────────────────────────────────────────── */
+@theme {
+  --color-r6-bg: #0e0e10;
+  --color-r6-surface: #131316;
+  --color-r6-surface-2: #1c1c21;
+  --color-r6-surface-3: #242429;
+  --color-r6-border: #27272a;
+  --color-r6-border-light: #3f3f46;
+  --color-r6-accent: #e85d2a;
+  --color-r6-accent-dim: rgba(232, 93, 42, 0.15);
+  --color-r6-text: #f4f4f5;
+  --color-r6-muted: #71717a;
+  --color-r6-muted-2: #52525b;
+  /* Glass surfaces — used for toolbar / floating panels / badges */
+  --color-r6-surface-glass: rgba(19, 19, 22, 0.94);
+  --color-r6-surface-glass-dim: rgba(19, 19, 22, 0.72);
+}
+
+/* ── Light theme override ─────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --color-r6-bg: #f0f0f4;
+  --color-r6-surface: #ffffff;
+  --color-r6-surface-2: #f4f4f5;
+  --color-r6-surface-3: #e4e4e8;
+  --color-r6-border: #d4d4d8;
+  --color-r6-border-light: #a1a1aa;
+  --color-r6-accent: #e85d2a;
+  --color-r6-accent-dim: rgba(232, 93, 42, 0.12);
+  --color-r6-text: #18181b;
+  --color-r6-muted: #52525b;
+  --color-r6-muted-2: #71717a;
+  --color-r6-surface-glass: rgba(240, 244, 248, 0.92);
+  --color-r6-surface-glass-dim: rgba(240, 244, 248, 0.80);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background-color: var(--color-r6-bg);
+  color: var(--color-r6-text);
+  font-family: ui-rounded, 'Nunito', 'Varela Round', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-r6-border);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-r6-border-light);
+}
+
+/* Text selection */
+::selection {
+  background: rgba(232, 93, 42, 0.35);
+  color: var(--color-r6-text);
+}
+
+/* Sidebar section collapse animation */
+.section-content {
+  overflow: hidden;
+  transition: max-height 0.2s ease;
+}
+
+/* Markdown styles for RightSidebar notes (list / heading focused) */
+.prose-r6 { user-select: text; }
+
+.prose-r6 h1, .prose-r6 h2, .prose-r6 h3 {
+  font-weight: 600;
+  margin: 1em 0 0.35em;
+  line-height: 1.3;
+}
+.prose-r6 h1 { font-size: 14px; color: var(--color-r6-text); }
+.prose-r6 h2 { font-size: 13px; color: var(--color-r6-text); }
+.prose-r6 h3 {
+  font-size: 11px;
+  color: var(--color-r6-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--color-r6-border);
+}
+.prose-r6 h3:first-child { margin-top: 0; }
+
+.prose-r6 p { margin: 0.35em 0; color: var(--color-r6-text); }
+
+.prose-r6 ul, .prose-r6 ol {
+  padding-left: 1.2em;
+  margin: 0.25em 0 0.6em;
+}
+.prose-r6 ul { list-style-type: disc; }
+.prose-r6 ol { list-style-type: decimal; }
+.prose-r6 li {
+  margin: 0.2em 0;
+  color: var(--color-r6-text);
+  line-height: 1.55;
+}
+.prose-r6 li::marker { color: var(--color-r6-muted-2); }
+
+.prose-r6 strong {
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.prose-r6 code {
+  background: var(--color-r6-surface-2);
+  border: 1px solid var(--color-r6-border);
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  color: var(--color-r6-accent);
+}
+
+.prose-r6 blockquote {
+  border-left: 2px solid var(--color-r6-accent);
+  padding-left: 0.75em;
+  margin: 0.5em 0;
+  color: var(--color-r6-muted);
+  font-style: italic;
+}
+
+.prose-r6 hr {
+  border: none;
+  border-top: 1px solid var(--color-r6-border);
+  margin: 0.75em 0;
+}
+
+/* GFM table styles (for tactic execution table) */
+.prose-r6 table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  font-size: 11px;
+  display: block;
+  overflow-x: auto;
+}
+.prose-r6 th {
+  background: var(--color-r6-surface-3);
+  color: var(--color-r6-accent);
+  font-weight: 600;
+  text-align: left;
+  padding: 5px 8px;
+  border: 1px solid var(--color-r6-border);
+  white-space: nowrap;
+}
+.prose-r6 td {
+  padding: 4px 8px;
+  border: 1px solid var(--color-r6-border);
+  color: var(--color-r6-text);
+  vertical-align: top;
+  line-height: 1.5;
+}
+.prose-r6 tr:nth-child(even) td {
+  background: rgba(255,255,255,0.02);
+}
+
+/* PDF export template prose styles (white background) */
+.pdf-prose { font-size: 12px; line-height: 1.6; color: #1a1a1a; }
+.pdf-prose h1 { font-size: 16px; font-weight: 700; color: #111; margin: 0.8em 0 0.3em; }
+.pdf-prose h2 { font-size: 14px; font-weight: 600; color: #111; margin: 0.8em 0 0.3em; }
+.pdf-prose h3 {
+  font-size: 11px; font-weight: 700; color: #e85d2a;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  padding-bottom: 4px; border-bottom: 1px solid #e0e0e0;
+  margin: 0.8em 0 0.4em;
+}
+.pdf-prose h3:first-child { margin-top: 0; }
+.pdf-prose p { margin: 0.3em 0; color: #1a1a1a; }
+.pdf-prose ul, .pdf-prose ol { padding-left: 1.4em; margin: 0.2em 0 0.5em; }
+.pdf-prose ul { list-style-type: disc; }
+.pdf-prose ol { list-style-type: decimal; }
+.pdf-prose li { margin: 0.15em 0; color: #1a1a1a; }
+.pdf-prose li::marker { color: #999; }
+.pdf-prose strong { font-weight: 700; color: #111; }
+.pdf-prose code {
+  background: #f4f4f5; border: 1px solid #e0e0e0; border-radius: 3px;
+  padding: 0.1em 0.3em; font-size: 10px; font-family: ui-monospace, monospace;
+  color: #e85d2a;
+}
+.pdf-prose table { width: 100%; border-collapse: collapse; margin: 0.5em 0; font-size: 10px; }
+.pdf-prose th {
+  background: #f4f4f5; color: #e85d2a; font-weight: 600;
+  text-align: left; padding: 4px 8px; border: 1px solid #e0e0e0; white-space: nowrap;
+}
+.pdf-prose td { padding: 3px 8px; border: 1px solid #e0e0e0; color: #1a1a1a; vertical-align: top; line-height: 1.4; }
+.pdf-prose tr:nth-child(even) td { background: #fafafa; }
+.pdf-prose hr { border: none; border-top: 1px solid #e0e0e0; margin: 0.6em 0; }
+
+/* Grid pattern for canvas background */
+.canvas-grid {
+  background-image:
+    linear-gradient(var(--color-r6-border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-r6-border) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: center center;
+}
