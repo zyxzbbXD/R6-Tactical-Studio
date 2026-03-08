@@ -18,11 +18,11 @@ import {
   ZoomIn, ZoomOut, Maximize2,
   Video, MapPin, ChevronDown, MousePointer2, Loader2, Bot, FileDown, Save,
   FileImage, FileText, Film,
-  Image as ImageIcon, Layers, Layers2, Type, Flag,
+  Image as ImageIcon, Layers2, Type, Flag, Box, ArrowUpDown,
 } from "lucide-react";
 import { dragState } from "../store/dragState";
 import FloatingVideoPlayer from "./FloatingVideoPlayer";
-import { useCanvasStore, type ViewMode } from "../store/canvasStore";
+import { useCanvasStore, type ViewMode, type OverlayKey } from "../store/canvasStore";
 import {
   useBoardStore,
   type BoardItem, type Tool,
@@ -354,26 +354,24 @@ function Dropdown<T extends string>({
 }
 
 // ─── Map background layer (isolated so useImage only re-runs on path change) ──
+// Receives pre-computed paths; empty string = don't load that layer.
+// Stacking order: base → props → stairs → vert → names
 
 function MapImageLayer({
-  basePath, verticalityPath, roomNamesPath, propsPath, stairsPath,
-  showVerticality, showRoomNames, showBlueprintDetails, currentView,
+  basePath, vertPath, propsPath, stairsPath, namesPath, currentView,
 }: {
   basePath: string;
-  verticalityPath?: string;
-  roomNamesPath?: string;
-  propsPath?: string;
-  stairsPath?: string;
-  showVerticality: boolean;
-  showRoomNames: boolean;
-  showBlueprintDetails: boolean;
+  vertPath: string;
+  propsPath: string;
+  stairsPath: string;
+  namesPath: string;
   currentView: ViewMode;
 }) {
   const [baseImage]   = useImage(basePath);
-  const [vertImage]   = useImage(verticalityPath  ?? "");
-  const [namesImage]  = useImage(roomNamesPath    ?? "");
-  const [propsImage]  = useImage(propsPath        ?? "");
-  const [stairsImage] = useImage(stairsPath       ?? "");
+  const [vertImage]   = useImage(vertPath);
+  const [propsImage]  = useImage(propsPath);
+  const [stairsImage] = useImage(stairsPath);
+  const [namesImage]  = useImage(namesPath);
   if (!baseImage) return null;
   const isBlueprint = currentView === "blueprint";
   return (
@@ -383,11 +381,10 @@ function MapImageLayer({
         <KonvaRect x={0} y={0} width={6400} height={3600} fill="#15539e" listening={false} />
       )}
       <KonvaImage image={baseImage}  x={0} y={0} listening={false} />
-      {showVerticality && vertImage   && <KonvaImage image={vertImage}   x={0} y={0} listening={false} />}
-      {showRoomNames   && namesImage  && <KonvaImage image={namesImage}  x={0} y={0} listening={false} />}
-      {/* Props and stairs overlays — blueprint view only, gated by unified Details toggle */}
-      {isBlueprint && showBlueprintDetails && propsPath  && propsImage  && <KonvaImage image={propsImage}  x={0} y={0} listening={false} />}
-      {isBlueprint && showBlueprintDetails && stairsPath && stairsImage && <KonvaImage image={stairsImage} x={0} y={0} listening={false} />}
+      {propsImage  && <KonvaImage image={propsImage}  x={0} y={0} listening={false} />}
+      {stairsImage && <KonvaImage image={stairsImage} x={0} y={0} listening={false} />}
+      {vertImage   && <KonvaImage image={vertImage}   x={0} y={0} listening={false} />}
+      {namesImage  && <KonvaImage image={namesImage}  x={0} y={0} listening={false} />}
       {/* Inset white border — sits 100px inside the paper edges */}
       {isBlueprint && (
         <KonvaRect x={100} y={100} width={6200} height={3400} stroke="rgba(255,255,255,0.7)" strokeWidth={8} listening={false} />
@@ -524,9 +521,9 @@ export default function MainCanvas() {
   const {
     maps,
     currentMapId, currentFloorId,
-    currentMap, currentFloor, currentBaseImagePath,
-    currentView, showVerticality, showRoomNames, showBlueprintDetails,
-    setMap, setFloor, setView, toggleVerticality, toggleRoomNames, toggleBlueprintDetails,
+    currentMap, currentFloor,
+    currentView, overlays,
+    setMap, setFloor, setView, toggleOverlay,
   } = useCanvasStore();
 
   // ── Settings store ─────────────────────────────────────────────────────────
@@ -576,16 +573,19 @@ export default function MainCanvas() {
   const phaseRef     = useRef<HTMLDivElement>(null);
 
   // Derived
-  const floorImagePath   = currentBaseImagePath();
-  const floor            = currentFloor();
-  const verticalityPath  = floor?.images?.verticality ?? "";
-  const roomNamesPath    = floor?.images?.roomNames   ?? "";
-  const propsPath        = floor?.images?.props       ?? "";
-  const stairsPath       = floor?.images?.stairs      ?? "";
-  const map              = currentMap();
-  const mapItems         = maps.map((m) => ({ id: m.id, label: m.name }));
-  const floorItems       = map ? map.floors.map((f) => ({ id: f.id, label: f.label })) : [];
-  const [, imageStatus]  = useImage(floorImagePath);
+  const floor      = currentFloor();
+  const map        = currentMap();
+  const mapItems   = maps.map((m) => ({ id: m.id, label: m.name }));
+  const floorItems = map ? map.floors.map((f) => ({ id: f.id, label: f.label })) : [];
+
+  // Path construction — floor.images is the single source of truth for all maps
+  const basePath   = floor?.images?.[currentView] ?? floor?.images?.default ?? "";
+  const vertPath   = overlays.vert   ? (floor?.images?.verticality ?? "") : "";
+  const propsPath  = overlays.props  ? (floor?.images?.props       ?? "") : "";
+  const stairsPath = overlays.stairs ? (floor?.images?.stairs      ?? "") : "";
+  const namesPath  = overlays.names  ? (floor?.images?.roomNames   ?? "") : "";
+
+  const [, imageStatus] = useImage(basePath);
 
   // ── Container resize ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -601,7 +601,7 @@ export default function MainCanvas() {
   // ── Fit-to-screen ──────────────────────────────────────────────────────────
   const fitToScreen = useCallback(() => {
     const imgEl = new Image();
-    imgEl.src = floorImagePath;
+    imgEl.src = basePath;
     const doFit = (w: number, h: number) => {
       if (!w || !h || !containerSize.width || !containerSize.height) return;
       const padding  = 48;
@@ -617,7 +617,7 @@ export default function MainCanvas() {
     };
     if (imgEl.complete && imgEl.naturalWidth) doFit(imgEl.naturalWidth, imgEl.naturalHeight);
     else imgEl.onload = () => doFit(imgEl.naturalWidth, imgEl.naturalHeight);
-  }, [floorImagePath, containerSize]);
+  }, [basePath, containerSize]);
 
   useEffect(() => {
     if (imageStatus === "loaded") fitToScreen();
@@ -627,7 +627,7 @@ export default function MainCanvas() {
   useEffect(() => {
     setScale(1);
     setPosition({ x: 0, y: 0 });
-  }, [floorImagePath]);
+  }, [basePath]);
 
   // ── Cancel live drawing when switching tools ───────────────────────────────
   useEffect(() => {
@@ -1083,31 +1083,14 @@ export default function MainCanvas() {
           </>
         )}
 
-        {/* Overlay toggles — hidden in isometric mode */}
-        {map && currentView !== "isometric" && (
+        {/* Overlay toggles — 4 independent layer switches */}
+        {map && (
           <>
-            <ToolBtn
-              icon={Layers2}
-              label={t("toggle_verticality", language)}
-              active={showVerticality}
-              onClick={toggleVerticality}
-            />
-            <ToolBtn
-              icon={Type}
-              label={t("toggle_room_names", language)}
-              active={showRoomNames}
-              onClick={toggleRoomNames}
-            />
+            <ToolBtn icon={Layers2}     label="Verticality"  active={overlays.vert}   onClick={() => toggleOverlay("vert"   as OverlayKey)} />
+            <ToolBtn icon={Box}         label="Props"        active={overlays.props}  onClick={() => toggleOverlay("props"  as OverlayKey)} />
+            <ToolBtn icon={ArrowUpDown} label="Stairs"       active={overlays.stairs} onClick={() => toggleOverlay("stairs" as OverlayKey)} />
+            <ToolBtn icon={Type}        label="Room Names"   active={overlays.names}  onClick={() => toggleOverlay("names"  as OverlayKey)} />
           </>
-        )}
-        {/* Blueprint details toggle (Props + Stairs) — blueprint mode only */}
-        {map && currentView === "blueprint" && (
-          <ToolBtn
-            icon={Layers}
-            label={t("toggle_blueprint_details", language)}
-            active={showBlueprintDetails}
-            onClick={toggleBlueprintDetails}
-          />
         )}
 
         <Divider />
@@ -1328,16 +1311,13 @@ export default function MainCanvas() {
           >
             {/* Layer 0 — map background (base + optional overlays) */}
             <Layer listening={false}>
-              {floorImagePath && (
+              {basePath && (
                 <MapImageLayer
-                  basePath={floorImagePath}
-                  verticalityPath={verticalityPath}
-                  roomNamesPath={roomNamesPath}
+                  basePath={basePath}
+                  vertPath={vertPath}
                   propsPath={propsPath}
                   stairsPath={stairsPath}
-                  showVerticality={showVerticality}
-                  showRoomNames={showRoomNames}
-                  showBlueprintDetails={showBlueprintDetails}
+                  namesPath={namesPath}
                   currentView={currentView}
                 />
               )}

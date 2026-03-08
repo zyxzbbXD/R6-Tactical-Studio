@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { MAPS, type MapConfig, type FloorConfig, type FloorImages } from "../config/assets";
 
 export type ViewMode = "default" | "blueprint" | "isometric";
+export type OverlayKey = "vert" | "props" | "stairs" | "names";
 
 interface AddCustomMapImagePayload {
   fileUrl: string;
@@ -12,7 +13,7 @@ interface AddCustomMapImagePayload {
 }
 
 interface CanvasState {
-  // ── Dynamic map list (starts with static MAPS, grows with custom imports) ─
+  // ── Dynamic map list ──────────────────────────────────────────────────────
   maps: MapConfig[];
 
   // ── Map / floor selection ──────────────────────────────────────────────────
@@ -21,33 +22,30 @@ interface CanvasState {
 
   // ── View mode & overlay toggles ───────────────────────────────────────────
   currentView: ViewMode;
-  showVerticality: boolean;
-  showRoomNames: boolean;
-  showBlueprintDetails: boolean;
+  overlays: Record<OverlayKey, boolean>;
 
   // ── Derived helpers (computed on demand) ──────────────────────────────────
   currentMap: () => MapConfig | null;
   currentFloor: () => FloorConfig | null;
-  currentBaseImagePath: () => string;
 
   // ── Actions ────────────────────────────────────────────────────────────────
   setMap: (mapId: string) => void;
   setFloor: (floorId: string) => void;
   setView: (view: ViewMode) => void;
-  toggleVerticality: () => void;
-  toggleRoomNames: () => void;
-  toggleBlueprintDetails: () => void;
+  toggleOverlay: (key: OverlayKey) => void;
   addCustomMapImage: (payload: AddCustomMapImagePayload) => void;
 }
+
+const DEFAULT_OVERLAYS: Record<OverlayKey, boolean> = {
+  vert: false, props: false, stairs: false, names: false,
+};
 
 export const useCanvasStore = create<CanvasState>((set, get) => ({
   maps: MAPS,
   currentMapId: null,
   currentFloorId: null,
   currentView: "default",
-  showVerticality: false,
-  showRoomNames: false,
-  showBlueprintDetails: false,
+  overlays: { ...DEFAULT_OVERLAYS },
 
   currentMap: () => {
     const { currentMapId, maps } = get();
@@ -60,29 +58,20 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     return map?.floors.find((f) => f.id === currentFloorId) ?? null;
   },
 
-  currentBaseImagePath: () => {
-    const { currentView } = get();
-    const floor = get().currentFloor();
-    if (!floor) return "";
-    return floor.images[currentView] ?? floor.images.default ?? "";
-  },
-
   setMap: (mapId) => {
     const map = get().maps.find((m) => m.id === mapId);
     set({
       currentMapId: mapId,
       currentFloorId: map?.floors[0]?.id ?? null,
       currentView: "default",
-      showVerticality: false,
-      showRoomNames: false,
+      overlays: { ...DEFAULT_OVERLAYS },
     });
   },
 
   setFloor: (floorId) => set({ currentFloorId: floorId }),
   setView: (view) => set({ currentView: view }),
-  toggleVerticality: () => set((s) => ({ showVerticality: !s.showVerticality })),
-  toggleRoomNames: () => set((s) => ({ showRoomNames: !s.showRoomNames })),
-  toggleBlueprintDetails: () => set((s) => ({ showBlueprintDetails: !s.showBlueprintDetails })),
+  toggleOverlay: (key) =>
+    set((s) => ({ overlays: { ...s.overlays, [key]: !s.overlays[key] } })),
 
   addCustomMapImage: ({ fileUrl, mapName, floorId, floorLabel, imageType }) => {
     // Deep-copy the maps array so we can mutate freely
@@ -107,17 +96,19 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
     const floor = targetMap.floors[floorIdx];
     floor.images[imageType] = fileUrl;
-    // Ensure there is always a default image so the floor renders
     if (!floor.images.default) floor.images.default = fileUrl;
 
     const isViewMode = imageType === "default" || imageType === "blueprint" || imageType === "isometric";
+    const newOverlays = { ...DEFAULT_OVERLAYS };
+    if (imageType === "verticality") newOverlays.vert = true;
+    if (imageType === "roomNames")   newOverlays.names = true;
+
     set({
       maps,
       currentMapId: mapId,
       currentFloorId: floorId,
       currentView: isViewMode ? (imageType as ViewMode) : "default",
-      showVerticality: imageType === "verticality",
-      showRoomNames: imageType === "roomNames",
+      overlays: newOverlays,
     });
   },
 }));

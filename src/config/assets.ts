@@ -30,95 +30,97 @@ export interface OperatorConfig {
 }
 
 // ─── Maps ──────────────────────────────────────────────────────────────────────
-// Floor order: B1 → 1F → 2F → Roof (bottom-up, standard R6 convention).
-// images.default — required base view.
-// images.blueprint / isometric / verticality / roomNames / props / stairs — optional; add when assets are ready.
+// Floor order: B1 → 1F → 2F → 3F → Roof (bottom-up, standard R6 convention).
+// Asset naming: {floorId}_default.jpg | _blueprint.png | _isometric.webp
+// Overlay masks: _overlay_vert.png | _overlay_props.png | _overlay_stairs.png | _overlay_names.png
 
 export const MAPS: MapConfig[] = [
   {
     id: "bank",
     name: "Bank",
     floors: [
-      { id: "bank-b1", label: "B1",   images: { default: "/maps/bank/b1_default.jpg", blueprint: "/maps/bank/b1_blueprint.png", isometric: "/maps/bank/b1_isometric.webp", props: "/maps/bank/b1_overlay_props.png", stairs: "/maps/bank/b1_overlay_stairs.png" } },
-      { id: "1f",   label: "1F",   images: { default: "/maps/r6-maps-bank-blueprint-1f.jpg",   blueprint: "/maps/bank/1f_blueprint.png",   isometric: "/maps/bank/1f_isometric.jpg",   verticality: "/maps/bank/1f_overlay_vert.png",   roomNames: "/maps/bank/1f_overlay_names.png"   } },
-      { id: "2f",   label: "2F",   images: { default: "/maps/r6-maps-bank-blueprint-2f.jpg",   blueprint: "/maps/bank/2f_blueprint.png",   isometric: "/maps/bank/2f_isometric.jpg",   verticality: "/maps/bank/2f_overlay_vert.png",   roomNames: "/maps/bank/2f_overlay_names.png"   } },
-      { id: "roof", label: "Roof", images: { default: "/maps/r6-maps-bank-blueprint-roof.jpg", blueprint: "/maps/bank/roof_blueprint.png", isometric: "/maps/bank/roof_isometric.jpg", verticality: "/maps/bank/roof_overlay_vert.png", roomNames: "/maps/bank/roof_overlay_names.png" } },
+      { id: "b1",   label: "B1",   images: { default: "/maps/bank/b1_default.jpg",   blueprint: "/maps/bank/b1_blueprint.png", isometric: "/maps/bank/b1_isometric.webp", props: "/maps/bank/b1_overlay_props.png", stairs: "/maps/bank/b1_overlay_stairs.png" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/bank/1f_default.jpg",   isometric: "/maps/bank/1f_isometric.webp" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/bank/2f_default.jpg",   isometric: "/maps/bank/2f_isometric.webp" } },
+      { id: "roof", label: "Roof", images: { default: "/maps/bank/roof_default.jpg" } },
     ],
   },
-  // ── Placeholders — add floor images when assets are available ──────────────
   {
     id: "border",
     name: "Border",
+    // Only isometric assets available; default view falls back to isometric image.
     floors: [
-      { id: "1f", label: "1F", images: { default: "/maps/border-1f.jpg" } },
-      { id: "2f", label: "2F", images: { default: "/maps/border-2f.jpg" } },
+      { id: "1f", label: "1F", images: { default: "/maps/border/1f_isometric.webp", isometric: "/maps/border/1f_isometric.webp" } },
+      { id: "2f", label: "2F", images: { default: "/maps/border/2f_isometric.webp", isometric: "/maps/border/2f_isometric.webp" } },
     ],
   },
   {
     id: "chalet",
     name: "Chalet",
     floors: [
-      { id: "b1",   label: "B1",   images: { default: "/maps/chalet-b1.jpg"   } },
-      { id: "1f",   label: "1F",   images: { default: "/maps/chalet-1f.jpg"   } },
-      { id: "2f",   label: "2F",   images: { default: "/maps/chalet-2f.jpg"   } },
-      { id: "roof", label: "Roof", images: { default: "/maps/chalet-roof.jpg" } },
+      { id: "b1",   label: "B1",   images: { default: "/maps/chalet/b1_default.jpg",   isometric: "/maps/chalet/b1_isometric.webp" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/chalet/1f_default.jpg",   isometric: "/maps/chalet/1f_isometric.webp" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/chalet/2f_default.jpg",   isometric: "/maps/chalet/2f_isometric.webp" } },
+      { id: "roof", label: "Roof", images: { default: "/maps/chalet/roof_default.jpg" } },
     ],
   },
   {
     id: "clubhouse",
     name: "Club House",
     floors: [
-      { id: "b1",   label: "B1",   images: { default: "/maps/clubhouse-b1.jpg"   } },
-      { id: "1f",   label: "1F",   images: { default: "/maps/clubhouse-1f.jpg"   } },
-      { id: "2f",   label: "2F",   images: { default: "/maps/clubhouse-2f.jpg"   } },
-      { id: "roof", label: "Roof", images: { default: "/maps/clubhouse-roof.jpg" } },
-    ],
-  },
-  {
-    id: "coastline",
-    name: "Coastline",
-    floors: [
-      { id: "1f", label: "1F", images: { default: "/maps/coastline-1f.jpg" } },
-      { id: "2f", label: "2F", images: { default: "/maps/coastline-2f.jpg" } },
+      { id: "b1",   label: "B1",   images: { default: "/maps/clubhouse/b1_default.jpg",   isometric: "/maps/clubhouse/b1_isometric.webp" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/clubhouse/1f_default.jpg",   isometric: "/maps/clubhouse/1f_isometric.webp" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/clubhouse/2f_default.jpg",   isometric: "/maps/clubhouse/2f_isometric.webp" } },
+      { id: "roof", label: "Roof", images: { default: "/maps/clubhouse/roof_default.jpg" } },
     ],
   },
   {
     id: "consulate",
     name: "Consulate",
     floors: [
-      { id: "b1",   label: "B1",   images: { default: "/maps/consulate-b1.jpg"   } },
-      { id: "1f",   label: "1F",   images: { default: "/maps/consulate-1f.jpg"   } },
-      { id: "2f",   label: "2F",   images: { default: "/maps/consulate-2f.jpg"   } },
-      { id: "roof", label: "Roof", images: { default: "/maps/consulate-roof.jpg" } },
+      { id: "b1",   label: "B1",   images: { default: "/maps/consulate/b1_default.jpg",   isometric: "/maps/consulate/b1_isometric.webp" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/consulate/1f_default.jpg",   isometric: "/maps/consulate/1f_isometric.webp" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/consulate/2f_default.jpg",   isometric: "/maps/consulate/2f_isometric.webp" } },
+      { id: "roof", label: "Roof", images: { default: "/maps/consulate/roof_default.jpg" } },
+    ],
+  },
+  {
+    id: "fortress",
+    name: "Fortress",
+    floors: [
+      { id: "1f",   label: "1F",   images: { default: "/maps/fortress/1f_default.jpg",   isometric: "/maps/fortress/1f_isometric.webp" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/fortress/2f_default.jpg",   isometric: "/maps/fortress/2f_isometric.webp" } },
+      { id: "roof", label: "Roof", images: { default: "/maps/fortress/roof_default.jpg" } },
     ],
   },
   {
     id: "kafe",
     name: "Kafe Dostoyevsky",
     floors: [
-      { id: "1f",   label: "1F",   images: { default: "/maps/kafe-1f.jpg"   } },
-      { id: "2f",   label: "2F",   images: { default: "/maps/kafe-2f.jpg"   } },
-      { id: "3f",   label: "3F",   images: { default: "/maps/kafe-3f.jpg"   } },
-      { id: "roof", label: "Roof", images: { default: "/maps/kafe-roof.jpg" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/kafe/1f_default.jpg",   isometric: "/maps/kafe/1f_isometric.webp" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/kafe/2f_default.jpg",   isometric: "/maps/kafe/2f_isometric.webp" } },
+      { id: "3f",   label: "3F",   images: { default: "/maps/kafe/3f_default.jpg",   isometric: "/maps/kafe/3f_isometric.webp" } },
+      { id: "roof", label: "Roof", images: { default: "/maps/kafe/roof_default.jpg" } },
     ],
   },
   {
-    id: "oregon",
-    name: "Oregon",
+    id: "lair",
+    name: "Lair",
     floors: [
-      { id: "b1",   label: "B1",   images: { default: "/maps/oregon-b1.jpg"   } },
-      { id: "1f",   label: "1F",   images: { default: "/maps/oregon-1f.jpg"   } },
-      { id: "2f",   label: "2F",   images: { default: "/maps/oregon-2f.jpg"   } },
-      { id: "roof", label: "Roof", images: { default: "/maps/oregon-roof.jpg" } },
+      { id: "b1",   label: "B1",   images: { default: "/maps/lair/b1_default.jpg",   isometric: "/maps/lair/b1_isometric.webp" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/lair/1f_default.jpg",   isometric: "/maps/lair/1f_isometric.webp" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/lair/2f_default.jpg",   isometric: "/maps/lair/2f_isometric.webp" } },
+      { id: "roof", label: "Roof", images: { default: "/maps/lair/roof_default.jpg" } },
     ],
   },
   {
-    id: "villa",
-    name: "Villa",
+    id: "nighthavenlabs",
+    name: "Nighthaven Labs",
     floors: [
-      { id: "b1", label: "B1", images: { default: "/maps/villa-b1.jpg" } },
-      { id: "1f", label: "1F", images: { default: "/maps/villa-1f.jpg" } },
-      { id: "2f", label: "2F", images: { default: "/maps/villa-2f.jpg" } },
+      { id: "b1",   label: "B1",   images: { default: "/maps/nighthavenlabs/b1_default.jpg",   isometric: "/maps/nighthavenlabs/b1_isometric.webp" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/nighthavenlabs/1f_default.jpg",   isometric: "/maps/nighthavenlabs/1f_isometric.webp" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/nighthavenlabs/2f_default.jpg",   isometric: "/maps/nighthavenlabs/2f_isometric.webp" } },
+      { id: "roof", label: "Roof", images: { default: "/maps/nighthavenlabs/roof_default.jpg" } },
     ],
   },
 ];
