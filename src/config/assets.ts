@@ -48,10 +48,10 @@ export const MAPS: MapConfig[] = [
   {
     id: "border",
     name: "Border",
-    // Only isometric assets available; default view falls back to isometric image.
     floors: [
-      { id: "1f", label: "1F", images: { default: "/maps/border/1f_isometric.webp", isometric: "/maps/border/1f_isometric.webp" } },
-      { id: "2f", label: "2F", images: { default: "/maps/border/2f_isometric.webp", isometric: "/maps/border/2f_isometric.webp" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/border/1f_default.jpg",   isometric: "/maps/border/1f_isometric.webp" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/border/2f_default.jpg",   isometric: "/maps/border/2f_isometric.webp" } },
+      { id: "roof", label: "Roof", images: { default: "/maps/border/roof_default.jpg" } },
     ],
   },
   {

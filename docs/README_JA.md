@@ -80,6 +80,7 @@ npm install
 
 # 3. 開発サーバーの起動 (Tauri + Vite)
 npm run tauri dev
+```
 
 ## 🤝 謝辞と開発メモ (Acknowledgments & Dev Notes)
 

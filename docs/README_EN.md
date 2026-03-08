@@ -80,6 +80,7 @@ npm install
 
 # 3. Launch dev server (Tauri + Vite)
 npm run tauri dev
+```
 
 ## 🤝 Acknowledgments & Dev Notes
 

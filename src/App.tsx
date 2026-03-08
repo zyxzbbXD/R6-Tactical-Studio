@@ -12,6 +12,10 @@ function App() {
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
+    // Sync macOS / Windows title-bar chrome with the app theme
+    import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+      getCurrentWindow().setTheme(theme === "dark" ? "dark" : "light").catch(() => {});
+    }).catch(() => {});
   }, [theme]);
 
   return (
