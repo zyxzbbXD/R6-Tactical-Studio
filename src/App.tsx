@@ -4,17 +4,14 @@ import Sidebar from "./components/Sidebar";
 import MainCanvas from "./components/MainCanvas";
 import RightSidebar from "./components/RightSidebar";
 import SettingsModal from "./components/SettingsModal";
+import ImportMapModal from "./components/ImportMapModal";
 import { useSettingsStore } from "./store/useSettingsStore";
 
 function App() {
   const theme = useSettingsStore((s) => s.theme);
 
   useEffect(() => {
-    if (theme === "light") {
-      document.documentElement.setAttribute("data-theme", "light");
-    } else {
-      document.documentElement.removeAttribute("data-theme");
-    }
+    document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
   return (
@@ -23,6 +20,7 @@ function App() {
       <MainCanvas />
       <RightSidebar />
       <SettingsModal />
+      <ImportMapModal />
     </div>
   );
 }

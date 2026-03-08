@@ -16,6 +16,7 @@ interface SettingsState {
   // UI state — persisted so panel stays open across reloads
   isRightSidebarOpen: boolean;
   isSettingsOpen: boolean;
+  isImportModalOpen: boolean;
 
   // Actions
   setApiKey: (key: string) => void;
@@ -26,6 +27,8 @@ interface SettingsState {
   toggleRightSidebar: () => void;
   openSettings: () => void;
   closeSettings: () => void;
+  openImportModal: () => void;
+  closeImportModal: () => void;
 }
 
 // ─── Store ─────────────────────────────────────────────────────────────────────
@@ -40,6 +43,7 @@ export const useSettingsStore = create<SettingsState>()(
       language: "zh",
       isRightSidebarOpen: false,
       isSettingsOpen: false,
+      isImportModalOpen: false,
 
       setApiKey: (key) => set({ apiKey: key }),
       setBaseUrl: (url) => set({ baseUrl: url }),
@@ -49,6 +53,8 @@ export const useSettingsStore = create<SettingsState>()(
       toggleRightSidebar: () => set((s) => ({ isRightSidebarOpen: !s.isRightSidebarOpen })),
       openSettings: () => set({ isSettingsOpen: true }),
       closeSettings: () => set({ isSettingsOpen: false }),
+      openImportModal: () => set({ isImportModalOpen: true }),
+      closeImportModal: () => set({ isImportModalOpen: false }),
     }),
     {
       name: "r6-settings",

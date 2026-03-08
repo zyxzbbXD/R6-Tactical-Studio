@@ -48,7 +48,7 @@ export default function SettingsModal() {
     >
       {/* Modal panel */}
       <div
-        className="flex w-[480px] flex-col rounded-2xl overflow-hidden"
+        className="flex w-[520px] flex-col rounded-2xl overflow-hidden"
         style={{
           background: "var(--color-r6-surface)",
           border: "1px solid var(--color-r6-border)",
@@ -58,7 +58,7 @@ export default function SettingsModal() {
       >
         {/* Header */}
         <div
-          className="flex items-center gap-3 px-5 py-4"
+          className="flex items-center gap-3 px-6 py-5"
           style={{ borderBottom: "1px solid var(--color-r6-border)" }}
         >
           <div
@@ -87,7 +87,7 @@ export default function SettingsModal() {
         </div>
 
         {/* Fields */}
-        <div className="flex flex-col gap-5 px-5 py-5">
+        <div className="flex flex-col gap-6 px-6 py-6">
           <Field
             ref={firstInputRef}
             icon={<Globe size={15} />}
@@ -192,7 +192,7 @@ export default function SettingsModal() {
 
         {/* Footer */}
         <div
-          className="flex items-center justify-between px-5 py-3"
+          className="flex items-center justify-between px-6 py-4"
           style={{ borderTop: "1px solid var(--color-r6-border)", background: "var(--color-r6-surface-2)" }}
         >
           <p className="text-[13px]" style={{ color: "var(--color-r6-muted-2)" }}>
@@ -200,7 +200,7 @@ export default function SettingsModal() {
           </p>
           <button
             onClick={closeSettings}
-            className="rounded-xl px-5 py-2 text-[14px] font-medium transition-opacity"
+            className="rounded-xl px-6 py-2.5 text-[14px] font-medium transition-opacity"
             style={{ background: "var(--color-r6-accent)", color: "#fff" }}
             onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
             onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
@@ -241,7 +241,7 @@ const Field = forwardRef<HTMLInputElement, FieldProps>(
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         spellCheck={false}
-        className="w-full rounded-xl px-3 py-2.5 text-[14px] outline-none transition-colors"
+        className="w-full rounded-xl px-3.5 py-2.5 text-[14px] outline-none transition-colors"
         style={{
           background: "var(--color-r6-surface-2)",
           border: "1px solid var(--color-r6-border)",

@@ -7,35 +7,6 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { useBoardStore } from "../store/useBoardStore";
 import { t } from "../locales/i18n";
 
-// ─── System prompt ──────────────────────────────────────────────────────────────
-
-const SYSTEM_PROMPT = `\
-你是一个专业的《彩虹六号：围攻》电竞教练。
-请仔细阅读用户提供的复盘文本或字幕，提取出核心战术安排，按照以下【双区块格式】输出，不要任何多余解释。
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【区块一：三阶段执行表格】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-输出一个 Markdown 表格，表头固定为：
-
-| 干员位置 | 开局（~1:45）| 中期（~1:00）| 后期 | 备注 |
-
-- 每行对应一个干员的站位/职责。
-- 单元格内用 "- 动作" 格式，每格 1-2 条，保持极简。
-- **关键动作**（下包位、切墙、关键道具）必须加粗。
-- 动词开头——进攻：车、推、控、切、压、跳、架、拿、下包；防守：防、打野、封、保、听电、Retake、死蹲、架。
-- 备注列只写下包精确位或干员替换建议，无内容则留空。
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【区块二：战术 Point 总结】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-表格下方另起一节，用三级标题 ### [进攻/防守] Point，以无序列表精炼总结 2-4 条核心控制逻辑。
-严禁使用比喻或修辞，只写区域控制关系和执行顺序。
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【报点规范】
-术语严格使用标准图报点（如：蓝通、IT、hatch、default、摩托、铁箱）。
-前期动作若多人相似，合并描述，重点突出中后期差异。`;
 
 // ─── RightSidebar ───────────────────────────────────────────────────────────────
 
@@ -71,7 +42,7 @@ export default function RightSidebar() {
 
     const boardContext =
       items.length > 0
-        ? `\n\n当前画板上的干员：${items.map((i) => i.name).join("、")}`
+        ? `${t("ai_board_context", language)}${items.map((i) => i.name).join(", ")}`
         : "";
 
     try {
@@ -85,7 +56,7 @@ export default function RightSidebar() {
         body: JSON.stringify({
           model,
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
+            { role: "system", content: t("ai_system_prompt", language) },
             { role: "user", content: inputText + boardContext },
           ],
           temperature: 0.3,
@@ -104,7 +75,7 @@ export default function RightSidebar() {
       const content: string | undefined = data?.choices?.[0]?.message?.content;
 
       if (!content) {
-        throw new Error("API 返回了成功状态，但 choices[0].message.content 为空。请检查 model 名称是否正确。");
+        throw new Error(t("api_empty_response", language));
       }
 
       setNotes(content);
@@ -156,7 +127,7 @@ export default function RightSidebar() {
           <textarea
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
-            placeholder={"粘贴字幕、解说文稿、文字复盘内容…\n\nAI 将自动提取干员分工，生成「开局 / 中期 / 后期」战术表格。"}
+            placeholder={t("ai_input_placeholder", language)}
             rows={6}
             className="w-full resize-none rounded-xl px-3 py-2 text-[13px] leading-relaxed outline-none transition-colors"
             style={{
@@ -265,7 +236,7 @@ export default function RightSidebar() {
               <p
                 className="text-[13px] leading-relaxed"
                 style={{ color: "var(--color-r6-muted-2)", fontFamily: "ui-monospace, monospace", whiteSpace: "pre-line" }}
-              >{`### 准备阶段\n- **Ash**: 留车在蓝通，人挂窗。\n- **Thermite**: 准备切外墙…\n\n### 局中执行\n- 配合闪光弹强切 **IT 房**。\n\n点击 Generate 或切到 Edit 手动编写。`}</p>
+              >{t("ai_placeholder_text", language)}</p>
             </div>
           )}
         </div>

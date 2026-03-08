@@ -1,9 +1,19 @@
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
+export interface FloorImages {
+  default: string;
+  blueprint?: string;
+  isometric?: string;
+  verticality?: string;
+  roomNames?: string;
+  props?: string;
+  stairs?: string;
+}
+
 export interface FloorConfig {
   id: string;
   label: string;
-  imagePath: string;
+  images: FloorImages;
 }
 
 export interface MapConfig {
@@ -21,17 +31,18 @@ export interface OperatorConfig {
 
 // ─── Maps ──────────────────────────────────────────────────────────────────────
 // Floor order: B1 → 1F → 2F → Roof (bottom-up, standard R6 convention).
-// Replace imagePath values with your actual filenames if they differ.
+// images.default — required base view.
+// images.blueprint / isometric / verticality / roomNames / props / stairs — optional; add when assets are ready.
 
 export const MAPS: MapConfig[] = [
   {
     id: "bank",
     name: "Bank",
     floors: [
-      { id: "b1",   label: "B1",   imagePath: "/maps/r6-maps-bank-blueprint-b1.jpg"   },
-      { id: "1f",   label: "1F",   imagePath: "/maps/r6-maps-bank-blueprint-1f.jpg"   },
-      { id: "2f",   label: "2F",   imagePath: "/maps/r6-maps-bank-blueprint-2f.jpg"   },
-      { id: "roof", label: "Roof", imagePath: "/maps/r6-maps-bank-blueprint-roof.jpg" },
+      { id: "bank-b1", label: "B1",   images: { default: "/maps/bank/b1_default.jpg", blueprint: "/maps/bank/b1_blueprint.png", isometric: "/maps/bank/b1_isometric.webp", props: "/maps/bank/b1_overlay_props.png", stairs: "/maps/bank/b1_overlay_stairs.png" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/r6-maps-bank-blueprint-1f.jpg",   blueprint: "/maps/bank/1f_blueprint.png",   isometric: "/maps/bank/1f_isometric.jpg",   verticality: "/maps/bank/1f_overlay_vert.png",   roomNames: "/maps/bank/1f_overlay_names.png"   } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/r6-maps-bank-blueprint-2f.jpg",   blueprint: "/maps/bank/2f_blueprint.png",   isometric: "/maps/bank/2f_isometric.jpg",   verticality: "/maps/bank/2f_overlay_vert.png",   roomNames: "/maps/bank/2f_overlay_names.png"   } },
+      { id: "roof", label: "Roof", images: { default: "/maps/r6-maps-bank-blueprint-roof.jpg", blueprint: "/maps/bank/roof_blueprint.png", isometric: "/maps/bank/roof_isometric.jpg", verticality: "/maps/bank/roof_overlay_vert.png", roomNames: "/maps/bank/roof_overlay_names.png" } },
     ],
   },
   // ── Placeholders — add floor images when assets are available ──────────────
@@ -39,75 +50,75 @@ export const MAPS: MapConfig[] = [
     id: "border",
     name: "Border",
     floors: [
-      { id: "1f", label: "1F", imagePath: "/maps/border-1f.jpg" },
-      { id: "2f", label: "2F", imagePath: "/maps/border-2f.jpg" },
+      { id: "1f", label: "1F", images: { default: "/maps/border-1f.jpg" } },
+      { id: "2f", label: "2F", images: { default: "/maps/border-2f.jpg" } },
     ],
   },
   {
     id: "chalet",
     name: "Chalet",
     floors: [
-      { id: "b1", label: "B1",   imagePath: "/maps/chalet-b1.jpg" },
-      { id: "1f", label: "1F",   imagePath: "/maps/chalet-1f.jpg" },
-      { id: "2f", label: "2F",   imagePath: "/maps/chalet-2f.jpg" },
-      { id: "roof", label: "Roof", imagePath: "/maps/chalet-roof.jpg" },
+      { id: "b1",   label: "B1",   images: { default: "/maps/chalet-b1.jpg"   } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/chalet-1f.jpg"   } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/chalet-2f.jpg"   } },
+      { id: "roof", label: "Roof", images: { default: "/maps/chalet-roof.jpg" } },
     ],
   },
   {
     id: "clubhouse",
     name: "Club House",
     floors: [
-      { id: "b1", label: "B1", imagePath: "/maps/clubhouse-b1.jpg" },
-      { id: "1f", label: "1F", imagePath: "/maps/clubhouse-1f.jpg" },
-      { id: "2f", label: "2F", imagePath: "/maps/clubhouse-2f.jpg" },
-      { id: "roof", label: "Roof", imagePath: "/maps/clubhouse-roof.jpg" },
+      { id: "b1",   label: "B1",   images: { default: "/maps/clubhouse-b1.jpg"   } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/clubhouse-1f.jpg"   } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/clubhouse-2f.jpg"   } },
+      { id: "roof", label: "Roof", images: { default: "/maps/clubhouse-roof.jpg" } },
     ],
   },
   {
     id: "coastline",
     name: "Coastline",
     floors: [
-      { id: "1f", label: "1F", imagePath: "/maps/coastline-1f.jpg" },
-      { id: "2f", label: "2F", imagePath: "/maps/coastline-2f.jpg" },
+      { id: "1f", label: "1F", images: { default: "/maps/coastline-1f.jpg" } },
+      { id: "2f", label: "2F", images: { default: "/maps/coastline-2f.jpg" } },
     ],
   },
   {
     id: "consulate",
     name: "Consulate",
     floors: [
-      { id: "b1",   label: "B1",   imagePath: "/maps/consulate-b1.jpg" },
-      { id: "1f",   label: "1F",   imagePath: "/maps/consulate-1f.jpg" },
-      { id: "2f",   label: "2F",   imagePath: "/maps/consulate-2f.jpg" },
-      { id: "roof", label: "Roof", imagePath: "/maps/consulate-roof.jpg" },
+      { id: "b1",   label: "B1",   images: { default: "/maps/consulate-b1.jpg"   } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/consulate-1f.jpg"   } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/consulate-2f.jpg"   } },
+      { id: "roof", label: "Roof", images: { default: "/maps/consulate-roof.jpg" } },
     ],
   },
   {
     id: "kafe",
     name: "Kafe Dostoyevsky",
     floors: [
-      { id: "1f",   label: "1F",   imagePath: "/maps/kafe-1f.jpg" },
-      { id: "2f",   label: "2F",   imagePath: "/maps/kafe-2f.jpg" },
-      { id: "3f",   label: "3F",   imagePath: "/maps/kafe-3f.jpg" },
-      { id: "roof", label: "Roof", imagePath: "/maps/kafe-roof.jpg" },
+      { id: "1f",   label: "1F",   images: { default: "/maps/kafe-1f.jpg"   } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/kafe-2f.jpg"   } },
+      { id: "3f",   label: "3F",   images: { default: "/maps/kafe-3f.jpg"   } },
+      { id: "roof", label: "Roof", images: { default: "/maps/kafe-roof.jpg" } },
     ],
   },
   {
     id: "oregon",
     name: "Oregon",
     floors: [
-      { id: "b1",   label: "B1",   imagePath: "/maps/oregon-b1.jpg" },
-      { id: "1f",   label: "1F",   imagePath: "/maps/oregon-1f.jpg" },
-      { id: "2f",   label: "2F",   imagePath: "/maps/oregon-2f.jpg" },
-      { id: "roof", label: "Roof", imagePath: "/maps/oregon-roof.jpg" },
+      { id: "b1",   label: "B1",   images: { default: "/maps/oregon-b1.jpg"   } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/oregon-1f.jpg"   } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/oregon-2f.jpg"   } },
+      { id: "roof", label: "Roof", images: { default: "/maps/oregon-roof.jpg" } },
     ],
   },
   {
     id: "villa",
     name: "Villa",
     floors: [
-      { id: "b1", label: "B1", imagePath: "/maps/villa-b1.jpg" },
-      { id: "1f", label: "1F", imagePath: "/maps/villa-1f.jpg" },
-      { id: "2f", label: "2F", imagePath: "/maps/villa-2f.jpg" },
+      { id: "b1", label: "B1", images: { default: "/maps/villa-b1.jpg" } },
+      { id: "1f", label: "1F", images: { default: "/maps/villa-1f.jpg" } },
+      { id: "2f", label: "2F", images: { default: "/maps/villa-2f.jpg" } },
     ],
   },
 ];
@@ -198,3 +209,30 @@ export const OPERATORS: OperatorConfig[] = [
 
 export const ATK_OPERATORS = OPERATORS.filter((op) => op.side === "atk");
 export const DEF_OPERATORS = OPERATORS.filter((op) => op.side === "def");
+
+// ─── Gadgets ───────────────────────────────────────────────────────────────────
+
+export interface GadgetConfig {
+  id: string;
+  name: string;
+  iconPath: string;
+}
+
+export const GADGETS: GadgetConfig[] = [
+  { id: "gadget-barb",           name: "Barb Wire",          iconPath: "/gadgets/Barb.webp"             },
+  { id: "gadget-barricade",      name: "Barricade",          iconPath: "/gadgets/Barricade.webp"        },
+  { id: "gadget-breach-charge",  name: "Breach Charge",      iconPath: "/gadgets/BreachCharge.webp"     },
+  { id: "gadget-defuser",        name: "Defuser",            iconPath: "/gadgets/Defuser.webp"          },
+  { id: "gadget-drone",          name: "Drone",              iconPath: "/gadgets/Drone.webp"            },
+  { id: "gadget-emp",            name: "EMP Grenade",        iconPath: "/gadgets/EMP.webp"              },
+  { id: "gadget-frag-grenade",   name: "Frag Grenade",       iconPath: "/gadgets/FragGrenade.webp"      },
+  { id: "gadget-hard-breach",    name: "Hard Breach Charge", iconPath: "/gadgets/HardBreachCharge.webp" },
+  { id: "gadget-impact-grenade", name: "Impact Grenade",     iconPath: "/gadgets/ImpactGrenade.webp"    },
+  { id: "gadget-nitro-cell",     name: "Nitro Cell",         iconPath: "/gadgets/NitroCell.webp"        },
+  { id: "gadget-proximity-mine", name: "Proximity Mine",     iconPath: "/gadgets/ProximityMine.webp"    },
+  { id: "gadget-reinforcement",  name: "Reinforcement",      iconPath: "/gadgets/Reinforcement.webp"    },
+  { id: "gadget-rotation",       name: "Rotation Shield",    iconPath: "/gadgets/Rotation.webp"         },
+  { id: "gadget-shield",         name: "Shield",             iconPath: "/gadgets/Shield.webp"           },
+  { id: "gadget-smoke-grenade",  name: "Smoke Grenade",      iconPath: "/gadgets/Smoke.webp"            },
+  { id: "gadget-stun-grenade",   name: "Stun Grenade",       iconPath: "/gadgets/StunGrenade.webp"      },
+];

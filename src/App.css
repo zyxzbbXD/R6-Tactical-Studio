@@ -19,6 +19,23 @@
   --color-r6-surface-glass-dim: rgba(19, 19, 22, 0.72);
 }
 
+/* ── Dark theme attribute (mirrors @theme defaults) ──────────────────────── */
+[data-theme="dark"] {
+  --color-r6-bg: #0e0e10;
+  --color-r6-surface: #131316;
+  --color-r6-surface-2: #1c1c21;
+  --color-r6-surface-3: #242429;
+  --color-r6-border: #27272a;
+  --color-r6-border-light: #3f3f46;
+  --color-r6-accent: #e85d2a;
+  --color-r6-accent-dim: rgba(232, 93, 42, 0.15);
+  --color-r6-text: #f4f4f5;
+  --color-r6-muted: #71717a;
+  --color-r6-muted-2: #52525b;
+  --color-r6-surface-glass: rgba(19, 19, 22, 0.94);
+  --color-r6-surface-glass-dim: rgba(19, 19, 22, 0.72);
+}
+
 /* ── Light theme override ─────────────────────────────────────────────────── */
 [data-theme="light"] {
   --color-r6-bg: #f0f0f4;
@@ -42,6 +59,7 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, fill 0.2s ease, stroke 0.2s ease, box-shadow 0.2s ease;
 }
 
 html,

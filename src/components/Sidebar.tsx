@@ -14,8 +14,9 @@ import {
   Trash2,
   Check,
   X,
+  Wrench,
 } from "lucide-react";
-import { ATK_OPERATORS, DEF_OPERATORS, MAPS, type OperatorConfig } from "../config/assets";
+import { ATK_OPERATORS, DEF_OPERATORS, GADGETS, MAPS, type GadgetConfig, type OperatorConfig } from "../config/assets";
 import { dragState } from "../store/dragState";
 import { useBoardStore } from "../store/useBoardStore";
 import { useSettingsStore } from "../store/useSettingsStore";
@@ -51,13 +52,13 @@ function SectionHeader({
   );
 }
 
-function OperatorGrid({ operators }: { operators: OperatorConfig[] }) {
+function AssetGrid({ items }: { items: (OperatorConfig | GadgetConfig)[] }) {
   const setDraggingIcon    = useBoardStore((s) => s.setDraggingIcon);
   const setTool            = useBoardStore((s) => s.setTool);
   const setPendingOperator = useBoardStore((s) => s.setPendingOperator);
   return (
     <div className="grid grid-cols-4 gap-1 px-3 pb-2">
-      {operators.map((op) => (
+      {items.map((op) => (
         <div
           key={op.id}
           title={op.name}
@@ -81,7 +82,7 @@ function OperatorGrid({ operators }: { operators: OperatorConfig[] }) {
             setDraggingIcon(false);
           }}
           data-operator-id={op.id}
-          data-operator-side={op.side}
+          data-operator-side={"side" in op ? op.side : undefined}
         >
           <div
             className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full"
@@ -112,11 +113,13 @@ function OperatorGrid({ operators }: { operators: OperatorConfig[] }) {
 // ─── Main Sidebar ──────────────────────────────────────────────────────────────
 
 export default function Sidebar() {
-  const [projectsOpen,  setProjectsOpen]  = useState(true);
-  const [assetsOpen,    setAssetsOpen]    = useState(true);
+  const [projectsOpen,   setProjectsOpen]   = useState(true);
+  const [assetsOpen,     setAssetsOpen]     = useState(true);
+  const [gadgetsOpen,    setGadgetsOpen]    = useState(true);
   const [activeAssetTab, setActiveAssetTab] = useState<"atk" | "def">("atk");
-  const openSettings = useSettingsStore((s) => s.openSettings);
-  const language     = useSettingsStore((s) => s.language);
+  const openSettings    = useSettingsStore((s) => s.openSettings);
+  const openImportModal = useSettingsStore((s) => s.openImportModal);
+  const language        = useSettingsStore((s) => s.language);
 
   const {
     init,
@@ -342,7 +345,7 @@ export default function Sidebar() {
         </div>
 
         {/* Asset Library Section */}
-        <div>
+        <div style={{ borderBottom: "1px solid var(--color-r6-border)" }}>
           <SectionHeader
             label={t("Asset Library", language)}
             icon={Users}
@@ -379,9 +382,20 @@ export default function Sidebar() {
                   </button>
                 ))}
               </div>
-              <OperatorGrid operators={activeAssetTab === "atk" ? ATK_OPERATORS : DEF_OPERATORS} />
+              <AssetGrid items={activeAssetTab === "atk" ? ATK_OPERATORS : DEF_OPERATORS} />
             </div>
           )}
+        </div>
+
+        {/* Gadgets Section */}
+        <div>
+          <SectionHeader
+            label={t("sidebar_gadgets", language)}
+            icon={Wrench}
+            open={gadgetsOpen}
+            onToggle={() => setGadgetsOpen(!gadgetsOpen)}
+          />
+          {gadgetsOpen && <AssetGrid items={GADGETS} />}
         </div>
       </div>
 
@@ -391,6 +405,7 @@ export default function Sidebar() {
         style={{ borderTop: "1px solid var(--color-r6-border)" }}
       >
         <button
+          onClick={openImportModal}
           className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-[13px] font-medium transition-colors"
           style={{
             background: "var(--color-r6-surface-2)",

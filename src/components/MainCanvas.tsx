@@ -7,6 +7,9 @@ import {
   Group as KonvaGroup,
   Circle as KonvaCircle,
   Text as KonvaText,
+  Rect as KonvaRect,
+  Label as KonvaLabel,
+  Tag as KonvaTag,
 } from "react-konva";
 import type Konva from "konva";
 import useImage from "use-image";
@@ -14,12 +17,12 @@ import {
   Pencil, ArrowRight, Eraser, Undo2,
   ZoomIn, ZoomOut, Maximize2,
   Video, MapPin, ChevronDown, MousePointer2, Loader2, Bot, FileDown, Save,
-  FileImage, FileText,
+  FileImage, FileText, Film,
+  Image as ImageIcon, Layers, Layers2, Type, Flag,
 } from "lucide-react";
-import { MAPS } from "../config/assets";
 import { dragState } from "../store/dragState";
 import FloatingVideoPlayer from "./FloatingVideoPlayer";
-import { useCanvasStore } from "../store/canvasStore";
+import { useCanvasStore, type ViewMode } from "../store/canvasStore";
 import {
   useBoardStore,
   type BoardItem, type Tool,
@@ -352,10 +355,45 @@ function Dropdown<T extends string>({
 
 // ─── Map background layer (isolated so useImage only re-runs on path change) ──
 
-function MapImageLayer({ imagePath }: { imagePath: string }) {
-  const [image] = useImage(imagePath);
-  if (!image) return null;
-  return <KonvaImage image={image} x={0} y={0} listening={false} />;
+function MapImageLayer({
+  basePath, verticalityPath, roomNamesPath, propsPath, stairsPath,
+  showVerticality, showRoomNames, showBlueprintDetails, currentView,
+}: {
+  basePath: string;
+  verticalityPath?: string;
+  roomNamesPath?: string;
+  propsPath?: string;
+  stairsPath?: string;
+  showVerticality: boolean;
+  showRoomNames: boolean;
+  showBlueprintDetails: boolean;
+  currentView: ViewMode;
+}) {
+  const [baseImage]   = useImage(basePath);
+  const [vertImage]   = useImage(verticalityPath  ?? "");
+  const [namesImage]  = useImage(roomNamesPath    ?? "");
+  const [propsImage]  = useImage(propsPath        ?? "");
+  const [stairsImage] = useImage(stairsPath       ?? "");
+  if (!baseImage) return null;
+  const isBlueprint = currentView === "blueprint";
+  return (
+    <>
+      {/* Standard-size blueprint background sheet (6400×3600) — cyanotype blue */}
+      {isBlueprint && (
+        <KonvaRect x={0} y={0} width={6400} height={3600} fill="#15539e" listening={false} />
+      )}
+      <KonvaImage image={baseImage}  x={0} y={0} listening={false} />
+      {showVerticality && vertImage   && <KonvaImage image={vertImage}   x={0} y={0} listening={false} />}
+      {showRoomNames   && namesImage  && <KonvaImage image={namesImage}  x={0} y={0} listening={false} />}
+      {/* Props and stairs overlays — blueprint view only, gated by unified Details toggle */}
+      {isBlueprint && showBlueprintDetails && propsPath  && propsImage  && <KonvaImage image={propsImage}  x={0} y={0} listening={false} />}
+      {isBlueprint && showBlueprintDetails && stairsPath && stairsImage && <KonvaImage image={stairsImage} x={0} y={0} listening={false} />}
+      {/* Inset white border — sits 100px inside the paper edges */}
+      {isBlueprint && (
+        <KonvaRect x={100} y={100} width={6200} height={3400} stroke="rgba(255,255,255,0.7)" strokeWidth={8} listening={false} />
+      )}
+    </>
+  );
 }
 
 // ─── Placed operator token ─────────────────────────────────────────────────────
@@ -482,11 +520,13 @@ function OperatorToken({
 // ─── Main component ────────────────────────────────────────────────────────────
 
 export default function MainCanvas() {
-  // ── Canvas store (map / floor) ─────────────────────────────────────────────
+  // ── Canvas store (map / floor / view) ─────────────────────────────────────
   const {
+    maps,
     currentMapId, currentFloorId,
-    currentMap, currentFloor,
-    setMap, setFloor,
+    currentMap, currentFloor, currentBaseImagePath,
+    currentView, showVerticality, showRoomNames, showBlueprintDetails,
+    setMap, setFloor, setView, toggleVerticality, toggleRoomNames, toggleBlueprintDetails,
   } = useCanvasStore();
 
   // ── Settings store ─────────────────────────────────────────────────────────
@@ -511,6 +551,7 @@ export default function MainCanvas() {
     addItem, updateItem, removeItem,
     addLine, removeLine,
     undo,
+    currentPhase, setPhase,
   } = useBoardStore();
 
   // ── Local UI state ────────────────────────────────────────────────────────
@@ -519,6 +560,8 @@ export default function MainCanvas() {
   const [position,      setPosition]      = useState<Vec2>({ x: 0, y: 0 });
   const [containerSize, setContainerSize] = useState<Size>({ width: 0, height: 0 });
   const [isExporting,   setIsExporting]   = useState(false);
+  const [phaseOpen,     setPhaseOpen]     = useState(false);
+  const [isExportingGif, setIsExportingGif] = useState(false);
 
   // Live drawing state (not committed to store yet)
   const [liveShape, setLiveShape] = useState<{
@@ -530,13 +573,19 @@ export default function MainCanvas() {
   // Refs
   const stageRef     = useRef<Konva.Stage>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const phaseRef     = useRef<HTMLDivElement>(null);
 
   // Derived
-  const floorImagePath = currentFloor()?.imagePath ?? "";
-  const map            = currentMap();
-  const mapItems       = MAPS.map((m) => ({ id: m.id, label: m.name }));
-  const floorItems     = map ? map.floors.map((f) => ({ id: f.id, label: f.label })) : [];
-  const [, imageStatus] = useImage(floorImagePath);
+  const floorImagePath   = currentBaseImagePath();
+  const floor            = currentFloor();
+  const verticalityPath  = floor?.images?.verticality ?? "";
+  const roomNamesPath    = floor?.images?.roomNames   ?? "";
+  const propsPath        = floor?.images?.props       ?? "";
+  const stairsPath       = floor?.images?.stairs      ?? "";
+  const map              = currentMap();
+  const mapItems         = maps.map((m) => ({ id: m.id, label: m.name }));
+  const floorItems       = map ? map.floors.map((f) => ({ id: f.id, label: f.label })) : [];
+  const [, imageStatus]  = useImage(floorImagePath);
 
   // ── Container resize ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -751,11 +800,14 @@ export default function MainCanvas() {
     }
   };
 
-  // Close export menu on outside click
+  // Close export menu and phase popover on outside click
   useEffect(() => {
     const close = (e: MouseEvent) => {
       if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
         setIsExportOpen(false);
+      }
+      if (phaseRef.current && !phaseRef.current.contains(e.target as Node)) {
+        setPhaseOpen(false);
       }
     };
     document.addEventListener("mousedown", close);
@@ -781,6 +833,72 @@ export default function MainCanvas() {
     a.download = "R6-Tactic-Notes.md";
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // Loop through phases 1-4, capture each, download as individual PNGs
+  const handleExportAllPhases = async () => {
+    const stage = stageRef.current;
+    if (!stage || isExporting || isExportingGif) return;
+    const savedPhase = currentPhase;
+    setIsExporting(true);
+    try {
+      for (const ph of [1, 2, 3, 4]) {
+        setPhase(ph);
+        await new Promise<void>((r) => setTimeout(r, 150));
+        const dataURL = stage.toDataURL({ pixelRatio: 2 });
+        const a = document.createElement("a");
+        a.href = dataURL;
+        a.download = `R6-Tactic-Phase-${ph}.png`;
+        a.click();
+        await new Promise<void>((r) => setTimeout(r, 200));
+      }
+      setPhase(savedPhase);
+    } catch (err) {
+      console.error("❌ [Export] Multi-phase export failed:", err);
+      setPhase(savedPhase);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // Capture all 4 phases and stitch into an animated GIF via gifshot
+  const handleExportGif = async () => {
+    const stage = stageRef.current;
+    if (!stage || isExportingGif || isExporting) return;
+    setIsExportingGif(true);
+    const savedPhase = currentPhase;
+    const frames: string[] = [];
+    try {
+      for (const ph of [1, 2, 3, 4]) {
+        setPhase(ph);
+        await new Promise<void>((r) => setTimeout(r, 150));
+        frames.push(stage.toDataURL({ pixelRatio: 1 }));
+      }
+      setPhase(savedPhase);
+      const { createGIF } = await import("gifshot");
+      createGIF(
+        {
+          images: frames,
+          gifWidth:   stage.width(),
+          gifHeight:  stage.height(),
+          interval:   1.5,
+          numWorkers: 2,
+        },
+        (obj) => {
+          if (!obj.error) {
+            const a = document.createElement("a");
+            a.href = obj.image;
+            a.download = "R6-Tactical-Animation.gif";
+            a.click();
+          }
+          setIsExportingGif(false);
+        },
+      );
+    } catch (err) {
+      console.error("❌ [Export] GIF export failed:", err);
+      setPhase(savedPhase);
+      setIsExportingGif(false);
+    }
   };
 
   // ── Stage mouse events (drawing) ───────────────────────────────────────────
@@ -897,6 +1015,101 @@ export default function MainCanvas() {
           </>
         )}
 
+        {/* Phase selector */}
+        {map && (
+          <div ref={phaseRef} className="relative shrink-0">
+            <button
+              onClick={() => setPhaseOpen((o) => !o)}
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[14px] font-medium"
+              style={{
+                background: phaseOpen ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
+                color:      phaseOpen ? "var(--color-r6-accent)"     : "var(--color-r6-text)",
+                border:     phaseOpen ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
+                minWidth: 112,
+              }}
+            >
+              <Flag size={13} style={{ opacity: 0.7, flexShrink: 0 }} />
+              <span className="flex-1 text-left truncate">{t(`phase_${currentPhase}`, language)}</span>
+              <ChevronDown size={12} style={{ opacity: 0.5, flexShrink: 0 }} />
+            </button>
+            {/* Animated slide-down popover */}
+            <div
+              style={{
+                position: "absolute", left: 0, top: "calc(100% + 4px)", zIndex: 60,
+                background: "var(--color-r6-surface)",
+                border: "1px solid var(--color-r6-border)",
+                borderRadius: 12,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.55)",
+                minWidth: 170, padding: "4px 0",
+                opacity: phaseOpen ? 1 : 0,
+                transform: phaseOpen ? "translateY(0)" : "translateY(-6px)",
+                pointerEvents: phaseOpen ? "auto" : "none",
+                transition: "opacity 0.15s ease, transform 0.15s ease",
+              }}
+            >
+              {([1, 2, 3, 4] as const).map((ph) => (
+                <button
+                  key={ph}
+                  onClick={() => { setPhase(ph); setPhaseOpen(false); }}
+                  className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-[14px]"
+                  style={{ color: ph === currentPhase ? "var(--color-r6-accent)" : "var(--color-r6-text)" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <span>{t(`phase_${ph}`, language)}</span>
+                  {ph === currentPhase && <span style={{ color: "var(--color-r6-accent)" }}>✓</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* View selector */}
+        {map && (
+          <>
+            <span className="text-[13px]" style={{ color: "var(--color-r6-muted-2)" }}>›</span>
+            <Dropdown<ViewMode>
+              value={currentView}
+              placeholder={t("view_standard", language)}
+              items={[
+                { id: "default",    label: t("view_standard",  language) },
+                { id: "blueprint",  label: t("view_blueprint", language) },
+                { id: "isometric",  label: t("view_isometric", language) },
+              ]}
+              onChange={setView}
+              icon={ImageIcon}
+              minWidth={108}
+            />
+          </>
+        )}
+
+        {/* Overlay toggles — hidden in isometric mode */}
+        {map && currentView !== "isometric" && (
+          <>
+            <ToolBtn
+              icon={Layers2}
+              label={t("toggle_verticality", language)}
+              active={showVerticality}
+              onClick={toggleVerticality}
+            />
+            <ToolBtn
+              icon={Type}
+              label={t("toggle_room_names", language)}
+              active={showRoomNames}
+              onClick={toggleRoomNames}
+            />
+          </>
+        )}
+        {/* Blueprint details toggle (Props + Stairs) — blueprint mode only */}
+        {map && currentView === "blueprint" && (
+          <ToolBtn
+            icon={Layers}
+            label={t("toggle_blueprint_details", language)}
+            active={showBlueprintDetails}
+            onClick={toggleBlueprintDetails}
+          />
+        )}
+
         <Divider />
 
         {/* Draw tools */}
@@ -986,18 +1199,18 @@ export default function MainCanvas() {
           <button
             title="Export tactical brief"
             onClick={() => setIsExportOpen((o) => !o)}
-            disabled={isExporting}
+            disabled={isExporting || isExportingGif}
             className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium"
             style={{
               background: isExportOpen ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-              color: isExporting ? "var(--color-r6-muted-2)" : isExportOpen ? "var(--color-r6-accent)" : "var(--color-r6-muted)",
+              color: (isExporting || isExportingGif) ? "var(--color-r6-muted-2)" : isExportOpen ? "var(--color-r6-accent)" : "var(--color-r6-muted)",
               border: isExportOpen ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
-              opacity: isExporting ? 0.6 : 1,
+              opacity: (isExporting || isExportingGif) ? 0.6 : 1,
             }}
-            onMouseEnter={(e) => { if (!isExporting && !isExportOpen) { e.currentTarget.style.background = "var(--color-r6-accent-dim)"; e.currentTarget.style.color = "var(--color-r6-accent)"; e.currentTarget.style.borderColor = "var(--color-r6-accent)"; } }}
-            onMouseLeave={(e) => { if (!isExporting && !isExportOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
+            onMouseEnter={(e) => { if (!isExporting && !isExportingGif && !isExportOpen) { e.currentTarget.style.background = "var(--color-r6-accent-dim)"; e.currentTarget.style.color = "var(--color-r6-accent)"; e.currentTarget.style.borderColor = "var(--color-r6-accent)"; } }}
+            onMouseLeave={(e) => { if (!isExporting && !isExportingGif && !isExportOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
           >
-            {isExporting ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
+            {(isExporting || isExportingGif) ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
             {t("Export", language)}
             <ChevronDown size={11} style={{ opacity: 0.6 }} />
           </button>
@@ -1013,9 +1226,11 @@ export default function MainCanvas() {
               }}
             >
               {[
-                { key: "Export PDF",      Icon: FileDown,  action: () => { setIsExportOpen(false); handleExport(); } },
-                { key: "Export Image",    Icon: FileImage, action: () => { setIsExportOpen(false); handleExportImage(); } },
-                { key: "Export Markdown", Icon: FileText,  action: () => { setIsExportOpen(false); handleExportMarkdown(); } },
+                { key: "Export PDF",       Icon: FileDown,  action: () => { setIsExportOpen(false); handleExport(); } },
+                { key: "export_current",   Icon: FileImage, action: () => { setIsExportOpen(false); handleExportImage(); } },
+                { key: "export_all",       Icon: FileImage, action: () => { setIsExportOpen(false); handleExportAllPhases(); } },
+                { key: "export_gif",       Icon: Film,      action: () => { setIsExportOpen(false); handleExportGif(); } },
+                { key: "Export Markdown",  Icon: FileText,  action: () => { setIsExportOpen(false); handleExportMarkdown(); } },
               ].map(({ key, Icon, action }) => (
                 <button
                   key={key}
@@ -1111,15 +1326,46 @@ export default function MainCanvas() {
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}   // cancel drawing if cursor leaves stage
           >
-            {/* Layer 0 — map background */}
+            {/* Layer 0 — map background (base + optional overlays) */}
             <Layer listening={false}>
-              {floorImagePath && <MapImageLayer imagePath={floorImagePath} />}
+              {floorImagePath && (
+                <MapImageLayer
+                  basePath={floorImagePath}
+                  verticalityPath={verticalityPath}
+                  roomNamesPath={roomNamesPath}
+                  propsPath={propsPath}
+                  stairsPath={stairsPath}
+                  showVerticality={showVerticality}
+                  showRoomNames={showRoomNames}
+                  showBlueprintDetails={showBlueprintDetails}
+                  currentView={currentView}
+                />
+              )}
+              {/* Blueprint legend — painted onto the paper at absolute canvas coords */}
+              {currentView === "blueprint" && (
+                <KonvaLabel x={160} y={160} listening={false}>
+                  <KonvaTag
+                    fill="rgba(10, 37, 64, 0.85)"
+                    cornerRadius={12}
+                    stroke="#4aa5ff"
+                    strokeWidth={6}
+                  />
+                  <KonvaText
+                    text={"■  " + (map?.name.toUpperCase() || "MAP") + " // " + (floor?.label.toUpperCase() || "FLOOR") + " — TACTICAL BLUEPRINT"}
+                    fill="#ffffff"
+                    fontFamily="ui-monospace, monospace"
+                    fontSize={72}
+                    fontStyle="bold"
+                    padding={40}
+                  />
+                </KonvaLabel>
+              )}
             </Layer>
 
             {/* Layer 1 — operator tokens + drawings */}
             <Layer>
-              {/* Committed lines */}
-              {lines.map((ln) =>
+              {/* Committed lines — filtered to current phase */}
+              {lines.filter((l) => l.phase === currentPhase).map((ln) =>
                 ln.type === "arrow" ? (
                   <Arrow key={ln.id}
                     points={ln.points}
@@ -1175,8 +1421,8 @@ export default function MainCanvas() {
                 />
               )}
 
-              {/* Placed operator tokens */}
-              {items.map((item) => (
+              {/* Placed operator tokens — filtered to current phase */}
+              {items.filter((i) => i.phase === currentPhase).map((item) => (
                 <OperatorToken
                   key={item.id}
                   item={item}
