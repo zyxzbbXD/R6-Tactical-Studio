@@ -4,6 +4,7 @@ import {
   GripHorizontal, X, FolderOpen,
   Play, Pause, Volume2, Volume1, VolumeX, Scan,
   Square, Maximize2, Expand,
+  ChevronLeft, ChevronRight, Download,
 } from "lucide-react";
 import { useBoardStore } from "../store/useBoardStore";
 import { useSettingsStore } from "../store/useSettingsStore";
@@ -38,7 +39,7 @@ export default function FloatingVideoPlayer() {
   const [isAnalyzing,       setIsAnalyzing]       = useState(false);
   const [analyzeProgress,   setAnalyzeProgress]   = useState(0);
   const [playerSize,        setPlayerSize]        = useState<"standard" | "large" | "fullscreen">("standard");
-  const [markTarget,        setMarkTarget]        = useState<"action" | "prep">("action");
+  const [isExportMenuOpen,  setIsExportMenuOpen]  = useState(false);
 
   const videoRef        = useRef<HTMLVideoElement>(null);
   const fileRef         = useRef<HTMLInputElement>(null);
@@ -46,6 +47,7 @@ export default function FloatingVideoPlayer() {
   const debugCanvasRef  = useRef<HTMLCanvasElement>(null);
   const abortRef        = useRef(false);
   const volumeMenuRef   = useRef<HTMLDivElement>(null);
+  const exportMenuRef   = useRef<HTMLDivElement>(null);
 
   // Abort any running analysis on unmount
   useEffect(() => { return () => { abortRef.current = true; }; }, []);
@@ -75,6 +77,57 @@ export default function FloatingVideoPlayer() {
     return () => window.removeEventListener("keydown", handler);
   }, [isVideoOpen]);
 
+  // Arrow keys → short press: ±5s, long press (400ms): jump to prev/next marker
+  const pressTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isLongPressRef = useRef(false);
+
+  useEffect(() => {
+    if (!isVideoOpen) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.repeat) { e.preventDefault(); return; }
+      e.preventDefault();
+      isLongPressRef.current = false;
+
+      pressTimerRef.current = setTimeout(() => {
+        isLongPressRef.current = true;
+        const v = videoRef.current;
+        if (!v) return;
+        const sorted = [...videoMarkers].sort((a, b) => a.time - b.time);
+        if (e.key === "ArrowRight") {
+          const target = sorted.find((m) => m.time > v.currentTime + 1);
+          if (target) v.currentTime = target.time;
+        } else {
+          const target = [...sorted].reverse().find((m) => m.time < v.currentTime - 1);
+          if (target) v.currentTime = target.time;
+        }
+      }, 400);
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
+      if (!isLongPressRef.current) {
+        const v = videoRef.current;
+        if (!v) return;
+        v.currentTime = e.key === "ArrowRight"
+          ? Math.min(v.currentTime + 5, v.duration)
+          : Math.max(v.currentTime - 5, 0);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup",   onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup",   onKeyUp);
+      if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
+    };
+  }, [isVideoOpen, videoMarkers]);
+
   // Revoke object URL when file changes
   useEffect(() => {
     return () => { if (videoSrc) URL.revokeObjectURL(videoSrc); };
@@ -103,11 +156,14 @@ export default function FloatingVideoPlayer() {
     else          { v.pause(); setIsPlaying(false); }
   };
 
-  // Close volume menu on outside click
+  // Close volume/export menus on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (volumeMenuRef.current && !volumeMenuRef.current.contains(e.target as Node)) {
         setIsVolumeMenuOpen(false);
+      }
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setIsExportMenuOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
@@ -169,50 +225,108 @@ export default function FloatingVideoPlayer() {
     const totalSteps    = Math.ceil(videoDuration / step);
     let   stepIdx       = 0;
 
-    const foundTimes: number[] = [];
+    // OCR the current video frame in a specific UI mode
+    const ocrFrameMode = async (mode: "broadcast" | "pov"): Promise<number | null> => {
+      const vw = v.videoWidth;
+      const vh = v.videoHeight;
+      // broadcast: timer sits at ~5% from top, 6%×6% crop
+      // pov:       timer is ~3% higher and ~5% larger
+      const bSy = vh * 0.05;
+      const bSw = vw * 0.06;
+      const bSh = vh * 0.06;
+      const sy = Math.floor(mode === "pov" ? bSy - vh * 0.03 : bSy);
+      const sw = Math.floor(mode === "pov" ? bSw * 1.05      : bSw);
+      const sh = Math.floor(mode === "pov" ? bSh * 1.05      : bSh);
+      const sx = Math.floor(vw * 0.47 - (sw - Math.floor(bSw)) / 2); // keep centered
+      offscreen.width  = sw;
+      offscreen.height = sh;
+      ctx.drawImage(v, sx, Math.max(0, sy), sw, sh, 0, 0, sw, sh);
+      const { data: { text } } = await worker.recognize(offscreen);
+      const m = text.match(/\b([0-2]):([0-5]\d)\b/);
+      if (!m) return null;
+      const remaining = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+      return remaining <= 180 ? remaining : null;
+    };
+
+    // Dual-mode OCR: tries currentUIMode first; falls back to the other and re-locks if successful
+    let currentUIMode: "broadcast" | "pov" = "broadcast";
+    const ocrFrame = async (): Promise<number | null> => {
+      let result = await ocrFrameMode(currentUIMode);
+      if (result === null) {
+        const fallback = currentUIMode === "broadcast" ? "pov" : "broadcast";
+        result = await ocrFrameMode(fallback);
+        if (result !== null) currentUIMode = fallback; // re-lock to whichever mode works
+      }
+      // Update debug canvas with the last crop drawn
+      const dbg = debugCanvasRef.current;
+      if (dbg) {
+        dbg.width  = offscreen.width;
+        dbg.height = offscreen.height;
+        dbg.getContext("2d")!.drawImage(offscreen, 0, 0);
+      }
+      return result;
+    };
+
+    // Binary-search the exact second the timer permanently disappears
+    const binarySearchRoundEnd = async (left: number, right: number): Promise<number> => {
+      const clampedRight = Math.min(right, videoDuration);
+      let lo = left, hi = clampedRight;
+      while (hi - lo > 1) {
+        const mid = Math.floor((lo + hi) / 2);
+        await seekTo(mid);
+        const remaining = await ocrFrame();
+        if (remaining !== null) lo = mid;
+        else                    hi = mid;
+      }
+      return hi;
+    };
+
+    // Neighborhood tracker — tolerates brief camera cuts (no snap-to-end on first miss)
+    // `partial` = true when the round started before the recording began (inferredStart < 0);
+    // partial rounds are tracked for continuity but never emitted as markers.
+    let activeRound: { actionStart: number; lastValidTime: number; partial: boolean } | null = null;
 
     for (let t2 = 0; t2 < videoDuration && !abortRef.current; t2 += step) {
       await seekTo(t2);
+      const remaining = await ocrFrame();
 
-      const vw = v.videoWidth;
-      const vh = v.videoHeight;
+      if (remaining !== null) {
+        const inferredStart = t2 - (180 - remaining);
+        const isPartial     = inferredStart < 0;
 
-      // Crop top-center match-timer region (R6 Pro League broadcast position)
-      const sx = Math.floor(vw * 0.47);
-      const sy = Math.floor(vh * 0.05);
-      const sw = Math.floor(vw * 0.06);
-      const sh = Math.floor(vh * 0.06);
-
-      offscreen.width  = sw;
-      offscreen.height = sh;
-      ctx.drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
-
-      // Mirror crop to debug canvas (top-left of video area)
-      const dbg = debugCanvasRef.current;
-      if (dbg) {
-        dbg.width  = sw;
-        dbg.height = sh;
-        dbg.getContext("2d")!.drawImage(offscreen, 0, 0);
-      }
-
-      // OCR — match strictly M:SS or MM:SS within action-phase range
-      const { data: { text } } = await worker.recognize(offscreen);
-      const m = text.match(/\b([0-2]):([0-5]\d)\b/);
-      if (m) {
-        const remaining = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-        if (remaining <= 180) {
-          const actionPhaseStart = t2 - (180 - remaining);
-          if (actionPhaseStart >= 0) {
-            const markerTime  = markTarget === "prep"
-              ? Math.max(0, actionPhaseStart - 30)
-              : actionPhaseStart;
-            const markerLabel = markTarget === "prep" ? "Prep Phase" : "Action Phase";
-            const isDup = foundTimes.some((ft) => Math.abs(ft - markerTime) <= 60);
-            if (!isDup) {
-              foundTimes.push(markerTime);
-              addVideoMarker({ time: markerTime, label: markerLabel });
-            }
+        if (!activeRound) {
+          // New round detected — only emit markers if the round starts within the video
+          if (!isPartial) {
+            addVideoMarker({ time: Math.max(0, inferredStart - 30), label: "Prep Phase" });
+            addVideoMarker({ time: inferredStart,                   label: "Action Phase" });
           }
+          activeRound = { actionStart: inferredStart, lastValidTime: t2, partial: isPartial };
+
+        } else if (Math.abs(inferredStart - activeRound.actionStart) <= 60) {
+          // Still in the same round — update last known valid position
+          activeRound.lastValidTime = t2;
+
+        } else {
+          // Timer jumped → close out previous round, start a new one
+          if (!activeRound.partial) {
+            const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
+            addVideoMarker({ time: endTime, label: "Round End" });
+          }
+          if (!isPartial) {
+            addVideoMarker({ time: Math.max(0, inferredStart - 30), label: "Prep Phase" });
+            addVideoMarker({ time: inferredStart,                   label: "Action Phase" });
+          }
+          activeRound = { actionStart: inferredStart, lastValidTime: t2, partial: isPartial };
+        }
+
+      } else {
+        // No timer — only declare round over once we've exceeded the max round window
+        if (activeRound && t2 > activeRound.actionStart + 250) {
+          if (!activeRound.partial) {
+            const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
+            addVideoMarker({ time: endTime, label: "Round End" });
+          }
+          activeRound = null;
         }
       }
 
@@ -220,11 +334,90 @@ export default function FloatingVideoPlayer() {
       setAnalyzeProgress(Math.round((stepIdx / totalSteps) * 100));
     }
 
+    // Final cleanup: close any complete round still active at end-of-video
+    if (!abortRef.current && activeRound && !activeRound.partial) {
+      const endTime = await binarySearchRoundEnd(
+        activeRound.lastValidTime,
+        Math.min(activeRound.lastValidTime + 20, videoDuration),
+      );
+      addVideoMarker({ time: endTime, label: "Round End" });
+    }
+
     await worker.terminate();
 
     if (!abortRef.current) await seekTo(0);
 
     setIsAnalyzing(false);
+  };
+
+  // ── FFmpeg script export ─────────────────────────────────────────────────────
+
+  const generateFFmpegScript = (os: "win" | "mac") => {
+    // Pair markers into rounds: (Prep Phase | Action Phase) → Round End
+    const sorted = [...videoMarkers].sort((a, b) => a.time - b.time);
+    const rounds: { roundNum: number; start: number; end: number }[] = [];
+    let roundStart: number | null = null;
+    let roundNum = 1;
+    for (const marker of sorted) {
+      if (roundStart === null && (marker.label === "Prep Phase" || marker.label === "Action Phase")) {
+        roundStart = marker.time;
+      } else if (roundStart !== null && marker.label === "Round End") {
+        rounds.push({ roundNum, start: roundStart, end: marker.time });
+        roundNum++;
+        roundStart = null;
+      }
+    }
+
+    // Format seconds → HH:MM:SS for ffmpeg
+    const ts = (s: number) => {
+      const h   = Math.floor(s / 3600);
+      const m   = Math.floor((s % 3600) / 60);
+      const sec = Math.floor(s % 60);
+      return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
+    };
+
+    const safeFileName = fileName || "video.mp4";
+
+    let script: string;
+    if (os === "win") {
+      const lines = [
+        "@echo off",
+        "chcp 65001",
+        "REM IMPORTANT: Place this script in the SAME folder as the video file before running.",
+        "cd /d \"%~dp0\"",
+        `mkdir "R6_Clips" 2>nul`,
+        `set "INPUT_VIDEO=${safeFileName}"`,
+        "",
+        ...rounds.map((r) =>
+          `ffmpeg -i "%INPUT_VIDEO%" -ss ${ts(r.start)} -to ${ts(r.end)} -c copy "R6_Clips\\Round_${r.roundNum}.mp4"`
+        ),
+        "",
+        "pause",
+      ];
+      script = lines.join("\r\n");
+    } else {
+      const lines = [
+        "#!/bin/bash",
+        "# IMPORTANT: Place this script in the SAME folder as the video file before running.",
+        `cd "$(dirname "$0")"`,
+        `mkdir -p "R6_Clips"`,
+        `INPUT_VIDEO="${safeFileName}"`,
+        "",
+        ...rounds.map((r) =>
+          `ffmpeg -i "$INPUT_VIDEO" -ss ${ts(r.start)} -to ${ts(r.end)} -c copy "R6_Clips/Round_${r.roundNum}.mp4"`
+        ),
+      ];
+      script = lines.join("\n");
+    }
+
+    const blob = new Blob([script], { type: "text/plain" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = os === "win" ? "Cut_R6_Rounds.bat" : "Cut_R6_Rounds.sh";
+    a.click();
+    URL.revokeObjectURL(url);
+    setIsExportMenuOpen(false);
   };
 
   // ── Derived ─────────────────────────────────────────────────────────────────
@@ -259,6 +452,7 @@ export default function FloatingVideoPlayer() {
         <div
           className="drag-handle flex cursor-grab items-center gap-2 px-3 py-2 select-none active:cursor-grabbing"
           style={{ borderBottom: "1px solid var(--color-r6-border)", background: "var(--color-r6-surface-glass-dim)" }}
+          onDoubleClick={() => setPlayerSize((prev) => prev === "fullscreen" ? "standard" : "fullscreen")}
         >
           <GripHorizontal size={17} style={{ color: "var(--color-r6-muted-2)", flexShrink: 0 }} />
           <span className="flex-1 truncate text-[14px] font-medium" style={{ color: "var(--color-r6-muted)" }}>
@@ -331,6 +525,7 @@ export default function FloatingVideoPlayer() {
               ? { flex: 1, minHeight: 0 }
               : { flex: "none", height: "auto", aspectRatio: "16/9" }),
           }}
+          onDoubleClick={() => setPlayerSize((prev) => prev === "fullscreen" ? "standard" : "fullscreen")}
         >
           {videoSrc ? (
             <video
@@ -434,7 +629,13 @@ export default function FloatingVideoPlayer() {
 
                 {/* Phase marker ticks */}
                 {videoMarkers.map((marker, i) => {
-                  const pct = duration > 0 ? (marker.time / duration) * 100 : 0;
+                  const pct    = duration > 0 ? (marker.time / duration) * 100 : 0;
+                  const color  = marker.label === "Round End"   ? "#ef4444"
+                               : marker.label === "Prep Phase"  ? "#06b6d4"
+                               :                                  "#facc15";
+                  const shadow = marker.label === "Round End"   ? "0 0 4px rgba(239,68,68,0.7)"
+                               : marker.label === "Prep Phase"  ? "0 0 4px rgba(6,182,212,0.7)"
+                               :                                  "0 0 4px rgba(250,204,21,0.7)";
                   return (
                     <button
                       key={i}
@@ -449,9 +650,9 @@ export default function FloatingVideoPlayer() {
                         left: `${pct}%`,
                         width: 3,
                         height: 14,
-                        background: "#facc15",
+                        background: color,
                         cursor: "pointer",
-                        boxShadow: "0 0 4px rgba(250,204,21,0.7)",
+                        boxShadow: shadow,
                       }}
                     />
                   );
@@ -535,37 +736,54 @@ export default function FloatingVideoPlayer() {
 
               <div className="flex-1" />
 
-              {/* Marker count badge */}
-              {videoMarkers.length > 0 && !isAnalyzing && (
-                <span
-                  className="text-[12px] rounded-lg px-2 py-0.5 font-medium"
-                  style={{
-                    background: "rgba(250,204,21,0.12)",
-                    color: "#facc15",
-                    border: "1px solid rgba(250,204,21,0.3)",
-                  }}
-                >
-                  {videoMarkers.length} {t("phases found", language)}
-                </span>
-              )}
-
-              {/* Mark target toggle */}
-              <button
-                title="Toggle: mark Action Phase or Prep Phase start"
-                onClick={() => setMarkTarget((prev) => prev === "action" ? "prep" : "action")}
-                disabled={isAnalyzing}
-                className="rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-colors shrink-0"
-                style={{
-                  background: "var(--color-r6-surface-2)",
-                  color: markTarget === "prep" ? "#facc15" : "var(--color-r6-muted)",
-                  border: markTarget === "prep" ? "1px solid rgba(250,204,21,0.4)" : "1px solid var(--color-r6-border)",
-                  opacity: isAnalyzing ? 0.5 : 1,
-                }}
-                onMouseEnter={(e) => { if (!isAnalyzing) e.currentTarget.style.background = "var(--color-r6-surface-3)"; }}
-                onMouseLeave={(e) => { if (!isAnalyzing) e.currentTarget.style.background = "var(--color-r6-surface-2)"; }}
-              >
-                {markTarget === "action" ? t("Mark: Action", language) : t("Mark: Prep", language)}
-              </button>
+              {/* Round count badge + prev/next navigation */}
+              {videoMarkers.length > 0 && !isAnalyzing && (() => {
+                const roundCount    = videoMarkers.filter((m) => m.label === "Action Phase").length;
+                const sortedMarkers = [...videoMarkers].sort((a, b) => a.time - b.time);
+                const navBtn = (dir: "prev" | "next") => {
+                  const v = videoRef.current;
+                  if (!v) return;
+                  const ct = v.currentTime;
+                  const target = dir === "next"
+                    ? sortedMarkers.find((m) => m.time > ct + 1)
+                    : [...sortedMarkers].reverse().find((m) => m.time < ct - 1);
+                  if (target) v.currentTime = target.time;
+                };
+                return (
+                  <div className="flex items-center gap-1">
+                    <button
+                      title="Previous marker"
+                      onClick={() => navBtn("prev")}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors"
+                      style={{ color: "var(--color-r6-muted)", background: "var(--color-r6-surface-2)", border: "1px solid var(--color-r6-border)" }}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--color-r6-text)"; e.currentTarget.style.borderColor = "var(--color-r6-muted-2)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; }}
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+                    <span
+                      className="text-[12px] rounded-lg px-2 py-0.5 font-medium"
+                      style={{
+                        background: "rgba(250,204,21,0.12)",
+                        color: "#facc15",
+                        border: "1px solid rgba(250,204,21,0.3)",
+                      }}
+                    >
+                      {roundCount} {t("rounds found", language)}
+                    </span>
+                    <button
+                      title="Next marker"
+                      onClick={() => navBtn("next")}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors"
+                      style={{ color: "var(--color-r6-muted)", background: "var(--color-r6-surface-2)", border: "1px solid var(--color-r6-border)" }}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--color-r6-text)"; e.currentTarget.style.borderColor = "var(--color-r6-muted-2)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; }}
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
+                );
+              })()}
 
               {/* Analyze button */}
               <button
@@ -597,6 +815,57 @@ export default function FloatingVideoPlayer() {
                 <Scan size={14} />
                 {isAnalyzing ? `${analyzeProgress}%` : t("Analyze", language)}
               </button>
+
+              {/* Export FFmpeg script dropdown */}
+              {videoMarkers.length > 0 && !isAnalyzing && (
+                <div ref={exportMenuRef} className="relative">
+                  <button
+                    title={t("Export Clips", language)}
+                    onClick={() => setIsExportMenuOpen((o) => !o)}
+                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors whitespace-nowrap"
+                    style={{
+                      background: isExportMenuOpen ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
+                      color:      isExportMenuOpen ? "var(--color-r6-accent)"     : "var(--color-r6-muted)",
+                      border:     isExportMenuOpen ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
+                    }}
+                    onMouseEnter={(e) => { if (!isExportMenuOpen) { e.currentTarget.style.background = "var(--color-r6-accent-dim)"; e.currentTarget.style.color = "var(--color-r6-accent)"; e.currentTarget.style.borderColor = "var(--color-r6-accent)"; } }}
+                    onMouseLeave={(e) => { if (!isExportMenuOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
+                  >
+                    <Download size={14} />
+                    {t("Export Clips", language)}
+                  </button>
+
+                  {isExportMenuOpen && (
+                    <div
+                      className="absolute bottom-full right-0 mb-2 rounded-xl py-1 text-[13px]"
+                      style={{
+                        background: "var(--color-r6-surface)",
+                        border:     "1px solid var(--color-r6-border)",
+                        boxShadow:  "0 6px 20px rgba(0,0,0,0.55)",
+                        minWidth:   180,
+                        zIndex:     100,
+                      }}
+                    >
+                      {([
+                        { label: "Export FFmpeg (.bat)", os: "win" as const },
+                        { label: "Export FFmpeg (.sh)",  os: "mac" as const },
+                      ]).map(({ label, os }) => (
+                        <button
+                          key={os}
+                          onClick={() => generateFFmpegScript(os)}
+                          className="flex w-full items-center gap-2 px-3 py-2"
+                          style={{ color: "var(--color-r6-text)" }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                        >
+                          <Download size={13} style={{ color: "var(--color-r6-muted)" }} />
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

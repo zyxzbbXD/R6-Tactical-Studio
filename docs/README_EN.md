@@ -1,84 +1,95 @@
-# 🛡️ R6 Tactical Studio v0.1.1
+# 🛡️ R6 Tactical Studio v0.1.2
 
-🌍 [简体中文](./README.md) | [English](./docs/README_EN.md) | [日本語](./docs/README_JA.md)
+🌍 [简体中文](../README.md) | [English](./README_EN.md) | [日本語](./README_JA.md)
 
-> A minimalist, cross-platform tactical whiteboard and AI video review tool built specifically for *Rainbow Six Siege*. Focused on offline portability, pure front-end hardcore video parsing, and multi-phase dynamic tactical deduction.
+> A minimalist, cross-platform tactical board and AI-powered VOD review tool built exclusively for Rainbow Six Siege. Featuring an offline, portable design, pure frontend hardcore video analysis, and multi-phase dynamic tactical planning.
 
----
+## 🎯 Why Do We Need a New R6 Tactical Tool?
 
-## 🎯 Why do we need a new R6 tactical tool?
+Most VOD review tools on the market are bloated. As a player with nearly 4,000 hours logged in the game, I know exactly what makes a truly useful tactical board: **extreme lightweight, instant accessibility, and intuitive layer interaction.**
 
-Most review tools on the market are bloated. As a hardcore player with nearly 4,000 hours in-game, I know exactly what a truly useful tactical board needs: **extreme lightness, instant access, and intuitive layer interaction.**
+After researching existing tools, I found several glaring issues:
 
-After researching existing tools, I identified several pain points:
+* **Limitations of existing tools:** Classic open-source projects like [feml1n/R6TAC_Modify](https://feml1n.github.io/R6TAC_Modify/) are great but rely on outdated tech stacks with clunky modern UI interactions. Platforms like [Gamecoach.gg](https://gamecoach.gg/esports/r6siege/) or [r6strat.com](https://r6strat.com/featured_strategies) hide core features behind paywalls or require a constant internet connection, focusing more on "showcasing" rather than "personal workflow review."
+* **Lack of a modern review loop:** Traditional boards only allow static line drawing. They fail to seamlessly integrate "POV VODs," "multi-phase timelines," and "tactical floor plans" onto a single screen.
+* **Inefficient information processing:** Translating text-based tactical summaries from community posts into visual setups in your head is time-consuming and exhausting.
 
-* **Limitations of existing tools:** Legacy open-source projects like [feml1n/R6TAC_Modify](https://feml1n.github.io/R6TAC_Modify/) are classics but use outdated tech stacks with non-modern UI. Platforms like [Gamecoach.gg](https://gamecoach.gg/esports/r6siege/) or [r6strat.com](https://r6strat.com/featured_strategies) often hide core features behind paywalls or require constant internet connectivity, focusing more on "presentation" than a "personal workflow review."
-* **Lack of a modern review loop:** Traditional whiteboards only offer static drawing. They fail to seamlessly integrate "First-Person VODs," "Multi-phase Timelines," and "Tactical Floor Plans" on a single screen.
-* **Low information processing efficiency:** When we see text-based tactical summaries in the community, converting them into positioning maps requires mental gymnastics, which is time-consuming and exhausting.
+**💡 Our Breakthroughs (Core Differentiation):**
 
-**💡 Our Solution (Core Differentiation):**
-
-1.  **Pure Local Hardware-Accelerated Parsing:** Unique local video OCR analysis. No FFmpeg installation required—utilizing browser GPU decoding and Web Worker lightweight recognition to automatically extract timestamps (e.g., Action Phase start) from match recordings and generate interactive timelines.
-2.  **Dynamic Wargaming Deduction:** Say goodbye to rigid static screenshots. Supports dynamic evolution through 4 phases (Prep, Early, Mid, Late) and allows one-click export of tactical GIFs.
-3.  **Immersive Tactical Blueprints:** Restores a professional tactical planning perspective using high-contrast blueprint backgrounds and fixed map info panels to make your strat-sharing more intuitive and professional.
-4.  **Extreme Portability:** Built on **Rust/Tauri**, it runs entirely offline with zero external environment dependencies. Just copy and run with near-instant startup.
-
----
+1. **Pure Local Hardware-Accelerated Analysis:** An exclusive local VOD OCR analysis with a state-machine debounce algorithm. No FFmpeg installation required. It utilizes browser GPU decoding and Web Workers for ultra-fast frame scanning, automatically adapting to both Broadcast and POV UI layouts to extract match timestamps.
+2. **"Zero-Bloat" VOD Clipping:** An industry-first feature that exports native OS-level FFmpeg lossless clipping scripts (`.bat` / `.sh`). It enables millisecond-level slicing of massive VOD files without adding a single kilobyte to the application's size.
+3. **Dynamic Tactical Planning:** Say goodbye to rigid, single-frame screenshots. Supports dynamic progression across phases 1-4 (Prep, Early, Mid, Late) with smooth keyboard navigation, plus one-click exporting of animated GIF tactical plans.
+4. **Immersive Blueprints & Adaptive Scaling:** Recreates an authentic, hardcore CAD blueprint perspective. It features an original edge-scanning algorithm (Bounding Box) based on pixel Alpha channels to automatically scale and center blueprints of any size.
+5. **Extremely Lightweight (Portable):** Built on Rust/Tauri, it runs entirely offline with zero external dependencies. Just copy, paste, and launch instantly.
 
 ## ✨ Core Features
 
 * **🗺️ Advanced Map System**
-    * **Multi-View Toggle**: Supports standard overhead (Standard), Tactical Blueprint (Blueprint), and 3D Isometric views.
-    * **Dynamic Overlays**: Independently toggle layers for Verticality (destructibility), Room Names, Stairs, and Details (Props).
-    * **Custom Map Import**: Drag-and-drop local images to define floors and view types, adapting to new maps in seconds.
+    * **Multi-View Toggle:** Freely switch between official Standard top-down views, Tactical Blueprints, and 3D Isometric views. Includes automatic asset fallback protection to prevent empty screens.
+    * **Dynamic Overlays:** Independently toggle transparent layers such as Verticality (destructible floors), Room Names, and Details (Stairs & Props).
+    * **Custom Map Import:** Drag and drop local images, assign floors and view types, and instantly adapt new map layouts.
 * **🪖 Dynamic Tactical Planning**
-    * **Operator & Gadget System**: Sidebar integrated with all operators and generic gadgets (Drones, C4, Barbed Wire, etc.), supporting cross-domain Drag & Drop, scaling, and rotation.
-    * **Four-Phase Timeline**: Supports tactical deduction across 4 phases. Switching to a new phase automatically inherits operator positions from the previous one, requiring only minor adjustments for movement.
-    * **Blueprint Visual Optimization**: Automatically renders 6,400 x 3,600 ultra-high-resolution blueprint bases in Blueprint Mode, complete with exclusive white wireframes and a fixed info plate.
+    * **Operator & Gadget System:** The sidebar integrates all operators and universal gadgets (drones, C4, barbed wire, etc.) with support for drag-and-drop, scaling, and rotation.
+    * **4-Phase Timeline:** Supports tactical planning across 4 phases. Switching to a new phase automatically inherits operator positions from the previous one, requiring only minor tweaks to demonstrate dynamic movements.
+    * **Blueprint Aesthetic Overhaul:** The blueprint mode automatically renders a deep blue 6400x3600 CAD background, complete with crisp white borders and a fixed top-left Title Block legend for a professional, geeky aesthetic.
 * **🎥 Built-in VOD Analysis**
-    * **Auto-Timestamping**: Drag local `.mp4` recordings into the floating window to scan the countdown UI. Using 10s sparse sampling and mathematical back-inference, it automatically generates "Action Phase" nodes on the progress bar.
-    * **Immersive Review**: Supports global pause and various floating window sizes (Standard, 50%, Fullscreen) so you can draw while you watch.
-* **🤖 AI Intelligent Parsing & i18n**
-    * **Multilingual Support**: Supports 6 languages (ZH, EN, JA, KO, FR, PT). AI prompts and UI terminology are perfectly adapted to regional player slang (e.g., Hard Breach, Default Plant, etc.).
-    * **Multi-Modal Export**: Export high-res PNGs, Markdown tactical notes, ZIP collections of all phases, or ultra-fast **Animated GIFs**.
-    * **Modern Adaptive UI**: Smooth Light/Dark theme switching with rounded typography and responsive scaling.
+    * **Lightning-Fast Binary Search Tagging:** Drag and drop local VODs into the floating player. One click triggers a binary search to precisely lock in round start/end times, generating a tri-color tactical timeline (Prep/Action/End).
+    * **Immersive Review Experience:** Features double-click fullscreen, resizable floating windows (Standard, 50%, etc.), and long-press keyboard navigation to instantly jump between tactical phases while you draw.
+* **🤖 AI Parsing & i18n**
+    * **Multi-Language & Native Terminology:** Integrates 6 languages (EN, ZH, JA, KO, FR, PT), perfectly adapting to the regional slang of Siege players (e.g., Hard Breach, Default Plant, etc.).
+    * **Multi-Modal Export Loop:** Export current frame HD PNGs, lightning-fast Animated GIFs, and local lossless video clipping scripts.
 
----
+## 🗺️ Map Asset Progress
+
+Because each layer requires AI super-resolution and manual alpha-channel extraction via Photoshop, map assets are being rolled out progressively. Current availability:
+
+| Map | Default | Isometric | Blueprint | Room Names | Props | Stairs | Verticality |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Bank** | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **Border** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **Nighthaven** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **Lair** | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **Kafe** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **Fortress*** | ✅ | ✅ | ❌(WIP) | ⬜ | ⬜ | ⬜ | ⬜ |
+| **Consulate** | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **Clubhouse** | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ |
+| **Chalet** | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ |
+
+> *\*Note: The official Standard map for Fortress is an outdated version. A UI warning will trigger automatically when selected. Its Blueprint version is currently being remade.*
 
 ## 🛠️ Tech Stack
 
 * **Frontend (UI & Interaction):** React 18 + Vite + TypeScript + Tailwind CSS
-* **Desktop Engine:** Tauri (Rust) - For lightweight packaging and system-level window management.
-* **Canvas Rendering:** React Konva + use-image
-* **Lightweight Local OCR:** `tesseract.js` (Configured with Web Workers and whitelist mode for high-speed digit capture).
-* **GIF Engine:** `gifshot` (Seamlessly captures Konva instances).
+* **Desktop Engine:** Tauri (Rust) - Handles ultra-lightweight packaging and OS-level window management.
+* **Canvas Rendering & Animation:** React Konva + use-image
+* **Video Stream & Algorithms:** `tesseract.js` (Dual-mode OCR & State-machine binary search)
+* **GIF Engine:** `gifshot` (Seamless Konva instance capturing)
 * **State Management:** Zustand
 
----
+## 📍 Roadmap
 
-## 🗺️ Roadmap
-
-- [x] **Phase 1-3: Architecture & Canvas Foundation** - Initialize Tauri, build dual-pane UI, implement Konva rendering, map mounting, zoom/pan, and operator drag interaction.
-- [x] **Phase 4-7: Video Review & Smart Analysis** - Implement `react-draggable` floating player; build pure frontend, zero-dependency OCR timeline markers via Canvas and Tesseract.js.
-- [x] **Phase 8-11: Modern UI & Map Engine Upgrade** - Deploy Light/Dark themes and 6-language localization; refactor map engine to support Blueprint/3D views and custom imports; add info legends.
-- [x] **Phase 12-13: Dynamic Wargaming & Multi-modal Export** - Integrate Gadget system; implement phase inheritance (1-4); finalize GIF/Markdown/PNG export loop.
-- [ ] **Phase 14: Tactical Cloud Sync (Planned)** - Support `.json` tactical saves and explore a community strategy sharing hub.
-
----
+- [x] **Phase 1-3: Infrastructure & Canvas Basics** - Initialize Tauri, build split-pane UI; implement Konva rendering, static map mounting, zoom/pan, and operator drag-and-drop.
+- [x] **Phase 4-7: VOD Review & Smart Analysis** - Implement floating video player; build pure-frontend VOD timeline OCR rough tagging.
+- [x] **Phase 8-11: Modern UI & Map Engine Upgrade** - Roll out Light/Dark themes and 6-language i18n; refactor map engine for multi-layer overlays.
+- [x] **Phase 12-13: Dynamic Planning & Multi-Modal Exports** - Integrate Gadget drag-and-drop; implement 1-4 phase toggling/inheritance; add GIF export and CAD Blueprint overhaul.
+- [x] **Phase 14-15: Advanced VOD Parsing & Geek Clipping** - Introduce binary search and Dual-Mode (Broadcast/POV) OCR; implement "Zero-bloat" native FFmpeg clipping scripts; add keyboard navigation.
+- [x] **Phase 16-17: Engine Robustness & Adaptive Scaling** - Implement map asset fallback protection; create Bounding Box edge detection via Alpha scanning for perfect blueprint centering.
+- [ ] **Phase 18+: Tactical Pen & Core Layers (In Progress)** - Add tactical drawing toolkits like dashed lines and grenade trajectories.
+- [ ] **Phase 19: Cloud Sync (Planned)** - Support `.json` tactical save imports/exports and community sharing.
 
 ## 🚀 Getting Started
 
-Ensure you have `Node.js` (v18+) and the `Rust` environment installed.
+Ensure you have `Node.js` (v18+) and `Rust` installed on your machine.
 
 ```bash
 # 1. Clone the repository
 git clone [https://github.com/zyxzbb/r6-tactical-studio.git](https://github.com/zyxzbb/r6-tactical-studio.git)
 cd r6-tactical-studio
 
-# 2. Install dependencies
+# 2. Install frontend dependencies
 npm install
 
-# 3. Launch dev server (Tauri + Vite)
+# 3. Start the development server (Tauri + Vite)
 npm run tauri dev
 ```
 

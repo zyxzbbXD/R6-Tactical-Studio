@@ -21,6 +21,7 @@ import {
   Image as ImageIcon, Layers2, Type, Flag, Box, ArrowUpDown,
 } from "lucide-react";
 import { dragState } from "../store/dragState";
+import { getBlueprintBoundingBox, type BoundingBox } from "../utils/imageUtils";
 import FloatingVideoPlayer from "./FloatingVideoPlayer";
 import { useCanvasStore, type ViewMode, type OverlayKey } from "../store/canvasStore";
 import {
@@ -262,22 +263,23 @@ function useOperatorIcon(src: string): HTMLImageElement | undefined {
 // ─── Reusable toolbar atoms ────────────────────────────────────────────────────
 
 function ToolBtn({
-  icon: Icon, label, active = false, onClick,
+  icon: Icon, label, active = false, disabled = false, onClick,
 }: {
-  icon: React.ElementType; label: string; active?: boolean; onClick?: () => void;
+  icon: React.ElementType; label: string; active?: boolean; disabled?: boolean; onClick?: () => void;
 }) {
   return (
     <button
       title={label}
       onClick={onClick}
-      className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
+      disabled={disabled}
+      className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
       style={{
         background: active ? "var(--color-r6-accent-dim)" : "transparent",
         color:      active ? "var(--color-r6-accent)"     : "var(--color-r6-muted)",
         border:     active ? "1px solid var(--color-r6-accent)" : "1px solid transparent",
       }}
-      onMouseEnter={(e) => { if (!active) { e.currentTarget.style.color = "var(--color-r6-text)"; e.currentTarget.style.background = "var(--color-r6-surface-2)"; } }}
-      onMouseLeave={(e) => { if (!active) { e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.background = "transparent"; } }}
+      onMouseEnter={(e) => { if (!active && !disabled) { e.currentTarget.style.color = "var(--color-r6-text)"; e.currentTarget.style.background = "var(--color-r6-surface-2)"; } }}
+      onMouseLeave={(e) => { if (!active && !disabled) { e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.background = "transparent"; } }}
     >
       <Icon size={15} />
     </button>
@@ -358,7 +360,7 @@ function Dropdown<T extends string>({
 // Stacking order: base → props → stairs → vert → names
 
 function MapImageLayer({
-  basePath, vertPath, propsPath, stairsPath, namesPath, currentView,
+  basePath, vertPath, propsPath, stairsPath, namesPath, currentView, blueprintScaleMode,
 }: {
   basePath: string;
   vertPath: string;
@@ -366,25 +368,42 @@ function MapImageLayer({
   stairsPath: string;
   namesPath: string;
   currentView: ViewMode;
+  blueprintScaleMode: "default" | "standard";
 }) {
   const [baseImage]   = useImage(basePath);
   const [vertImage]   = useImage(vertPath);
   const [propsImage]  = useImage(propsPath);
   const [stairsImage] = useImage(stairsPath);
   const [namesImage]  = useImage(namesPath);
+  const [bbox, setBbox] = useState<BoundingBox | null>(null);
+
+  useEffect(() => {
+    if (!baseImage || currentView !== "blueprint") { setBbox(null); return; }
+    setBbox(getBlueprintBoundingBox(baseImage));
+  }, [baseImage, currentView]);
+
   if (!baseImage) return null;
   const isBlueprint = currentView === "blueprint";
+
+  // Compute transform for standard scale mode
+  const useStandard = isBlueprint && blueprintScaleMode === "standard" && bbox;
+  const TARGET_SIZE = 3000;
+  const scaleFactor = useStandard ? TARGET_SIZE / Math.max(bbox.width, bbox.height) : 1;
+  const imgProps = useStandard
+    ? { x: 3200, y: 1800, offsetX: bbox.centerX, offsetY: bbox.centerY, scaleX: scaleFactor, scaleY: scaleFactor }
+    : { x: 0,    y: 0,    offsetX: 0,             offsetY: 0,             scaleX: 1,            scaleY: 1 };
+
   return (
     <>
       {/* Standard-size blueprint background sheet (6400×3600) — cyanotype blue */}
       {isBlueprint && (
         <KonvaRect x={0} y={0} width={6400} height={3600} fill="#15539e" listening={false} />
       )}
-      <KonvaImage image={baseImage}  x={0} y={0} listening={false} />
-      {propsImage  && <KonvaImage image={propsImage}  x={0} y={0} listening={false} />}
-      {stairsImage && <KonvaImage image={stairsImage} x={0} y={0} listening={false} />}
-      {vertImage   && <KonvaImage image={vertImage}   x={0} y={0} listening={false} />}
-      {namesImage  && <KonvaImage image={namesImage}  x={0} y={0} listening={false} />}
+      <KonvaImage image={baseImage}  {...imgProps} listening={false} />
+      {propsImage  && <KonvaImage image={propsImage}  {...imgProps} listening={false} />}
+      {stairsImage && <KonvaImage image={stairsImage} {...imgProps} listening={false} />}
+      {vertImage   && <KonvaImage image={vertImage}   {...imgProps} listening={false} />}
+      {namesImage  && <KonvaImage image={namesImage}  {...imgProps} listening={false} />}
       {/* Inset white border — sits 100px inside the paper edges */}
       {isBlueprint && (
         <KonvaRect x={100} y={100} width={6200} height={3400} stroke="rgba(255,255,255,0.7)" strokeWidth={8} listening={false} />
@@ -523,7 +542,8 @@ export default function MainCanvas() {
     currentMapId, currentFloorId,
     currentMap, currentFloor,
     currentView, overlays,
-    setMap, setFloor, setView, toggleOverlay,
+    blueprintScaleMode,
+    setMap, setFloor, setView, toggleOverlay, setBlueprintScaleMode,
   } = useCanvasStore();
 
   // ── Settings store ─────────────────────────────────────────────────────────
@@ -576,7 +596,11 @@ export default function MainCanvas() {
   const floor      = currentFloor();
   const map        = currentMap();
   const mapItems   = maps.map((m) => ({ id: m.id, label: m.name }));
-  const floorItems = map ? map.floors.map((f) => ({ id: f.id, label: f.label })) : [];
+  const floorItems = map
+    ? map.floors
+        .filter((f) => f.images.default || f.images.blueprint || f.images.isometric)
+        .map((f) => ({ id: f.id, label: f.label }))
+    : [];
 
   // Path construction — floor.images is the single source of truth for all maps
   const basePath   = floor?.images?.[currentView] ?? floor?.images?.default ?? "";
@@ -628,6 +652,16 @@ export default function MainCanvas() {
     setScale(1);
     setPosition({ x: 0, y: 0 });
   }, [basePath]);
+
+  // Auto-fallback: if the selected view has no image on the new floor, switch to first available
+  useEffect(() => {
+    const f = currentFloor();
+    if (!f) return;
+    if (f.images[currentView]) return; // current view is available — nothing to do
+    const fallback = (["default", "blueprint", "isometric"] as const).find((v) => f.images[v]);
+    if (fallback) setView(fallback);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentFloorId, currentMapId]);
 
   // ── Cancel live drawing when switching tools ───────────────────────────────
   useEffect(() => {
@@ -1071,25 +1105,34 @@ export default function MainCanvas() {
             <Dropdown<ViewMode>
               value={currentView}
               placeholder={t("view_standard", language)}
-              items={[
-                { id: "default",    label: t("view_standard",  language) },
-                { id: "blueprint",  label: t("view_blueprint", language) },
-                { id: "isometric",  label: t("view_isometric", language) },
-              ]}
+              items={([
+                floor?.images.default    && { id: "default"   as ViewMode, label: t("view_standard",  language) },
+                floor?.images.blueprint  && { id: "blueprint" as ViewMode, label: t("view_blueprint", language) },
+                floor?.images.isometric  && { id: "isometric" as ViewMode, label: t("view_isometric", language) },
+              ] as const).filter(Boolean) as { id: ViewMode; label: string }[]}
               onChange={setView}
               icon={ImageIcon}
               minWidth={108}
             />
+            {/* Blueprint scale mode toggle — icon-only, only visible in blueprint view */}
+            {currentView === "blueprint" && (
+              <ToolBtn
+                icon={blueprintScaleMode === "standard" ? ImageIcon : Maximize2}
+                label={t(blueprintScaleMode === "standard" ? "scale_default" : "scale_standard", language)}
+                active={blueprintScaleMode === "standard"}
+                onClick={() => setBlueprintScaleMode(blueprintScaleMode === "standard" ? "default" : "standard")}
+              />
+            )}
           </>
         )}
 
         {/* Overlay toggles — 4 independent layer switches */}
         {map && (
           <>
-            <ToolBtn icon={Layers2}     label="Verticality"  active={overlays.vert}   onClick={() => toggleOverlay("vert"   as OverlayKey)} />
-            <ToolBtn icon={Box}         label="Props"        active={overlays.props}  onClick={() => toggleOverlay("props"  as OverlayKey)} />
-            <ToolBtn icon={ArrowUpDown} label="Stairs"       active={overlays.stairs} onClick={() => toggleOverlay("stairs" as OverlayKey)} />
-            <ToolBtn icon={Type}        label="Room Names"   active={overlays.names}  onClick={() => toggleOverlay("names"  as OverlayKey)} />
+            <ToolBtn icon={Layers2}     label="Verticality"  active={overlays.vert}   disabled={!floor?.images.verticality}                              onClick={() => toggleOverlay("vert"   as OverlayKey)} />
+            <ToolBtn icon={Box}         label="Props"        active={overlays.props}  disabled={!floor?.images.props}                                    onClick={() => toggleOverlay("props"  as OverlayKey)} />
+            <ToolBtn icon={ArrowUpDown} label="Stairs"       active={overlays.stairs} disabled={!floor?.images.stairs}                                   onClick={() => toggleOverlay("stairs" as OverlayKey)} />
+            <ToolBtn icon={Type}        label="Room Names"   active={overlays.names}  disabled={!floor?.images.roomNames}                                onClick={() => toggleOverlay("names"  as OverlayKey)} />
           </>
         )}
 
@@ -1319,6 +1362,7 @@ export default function MainCanvas() {
                   stairsPath={stairsPath}
                   namesPath={namesPath}
                   currentView={currentView}
+                  blueprintScaleMode={blueprintScaleMode}
                 />
               )}
               {/* Blueprint legend — painted onto the paper at absolute canvas coords */}
@@ -1428,6 +1472,16 @@ export default function MainCanvas() {
             <span style={{ color: "var(--color-r6-muted-2)" }}> · {t("hint.del", language)}</span>
           )}
         </div>
+
+        {/* Outdated map warning */}
+        {map?.id === "fortress" && currentView === "default" && (
+          <div
+            className="absolute bottom-6 right-6 px-4 py-2 rounded-lg shadow-lg text-sm font-bold z-10 pointer-events-none"
+            style={{ background: "rgba(239,68,68,0.9)", color: "#fff" }}
+          >
+            {t("warning_outdated_map", language)}
+          </div>
+        )}
 
         {/* Zoom badge */}
         {zoomPercent !== 100 && (

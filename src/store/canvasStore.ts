@@ -23,6 +23,7 @@ interface CanvasState {
   // ── View mode & overlay toggles ───────────────────────────────────────────
   currentView: ViewMode;
   overlays: Record<OverlayKey, boolean>;
+  blueprintScaleMode: "default" | "standard";
 
   // ── Derived helpers (computed on demand) ──────────────────────────────────
   currentMap: () => MapConfig | null;
@@ -33,6 +34,7 @@ interface CanvasState {
   setFloor: (floorId: string) => void;
   setView: (view: ViewMode) => void;
   toggleOverlay: (key: OverlayKey) => void;
+  setBlueprintScaleMode: (mode: "default" | "standard") => void;
   addCustomMapImage: (payload: AddCustomMapImagePayload) => void;
 }
 
@@ -46,6 +48,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   currentFloorId: null,
   currentView: "default",
   overlays: { ...DEFAULT_OVERLAYS },
+  blueprintScaleMode: "default",
 
   currentMap: () => {
     const { currentMapId, maps } = get();
@@ -70,6 +73,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   setFloor: (floorId) => set({ currentFloorId: floorId }),
   setView: (view) => set({ currentView: view }),
+  setBlueprintScaleMode: (mode) => set({ blueprintScaleMode: mode }),
   toggleOverlay: (key) =>
     set((s) => ({ overlays: { ...s.overlays, [key]: !s.overlays[key] } })),
 
