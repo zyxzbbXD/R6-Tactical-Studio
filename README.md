@@ -97,7 +97,7 @@ npm run tauri dev
 
 作为一个主打高清晰度战术分享的工具，底图的质量直接决定了体验的上限。但在这里不得不吐槽一句：**育碧官网提供的地图素材实在是糊得令人发指（Ubisoft, please fix!）**。为了得到纯净蓝图，项目中所有的官方底图我都得先丢进 AI 跑一遍超分辨率重构，再进 PS 手动抠图、拉透明通道，纯纯的无语。
 
-另外，项目中 **3D 倾斜透视图（Isometric View）** 的灵图片与部分参考来自开源项目 [nanoKdR6/R6TAC](https://github.com/nanoKdR6/R6TAC)，在此向原作者致以崇高的敬意！
+另外，项目中 **3D 倾斜透视图（Isometric View）** 的灵感与图片参考了开源项目 [nanoKdR6/R6TAC](https://github.com/nanoKdR6/R6TAC)，在此向原作者致以崇高的敬意！
 
 ### ⚖️ 资源致谢 (Asset Acknowledgments)
 本项目使用了与《彩虹六号：围攻》（*Rainbow Six Siege*）相关的各类知识产权。在此特别感谢并致谢：
