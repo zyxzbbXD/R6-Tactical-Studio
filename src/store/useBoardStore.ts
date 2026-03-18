@@ -176,6 +176,7 @@ interface BoardState {
   loadProjectData: (data: unknown) => void;
   clearAll: () => void;
   clearBoard: () => void;
+  clearFloor: (phase: number, floorId: string | null) => void;
   addVideoMarker: (marker: VideoMarker) => void;
   clearVideoMarkers: () => void;
   setPhase: (phase: number) => void;
@@ -457,6 +458,13 @@ export const useBoardStore = create<BoardState>((set) => ({
 
   clearAll: () => set({ items: [], lines: [], throwableLines: [], texts: [], _history: [] }),
   clearBoard: () => set({ items: [], lines: [], throwableLines: [], texts: [], notes: "", _history: [] }),
+  clearFloor: (phase, floorId) => set((s) => ({
+    items:          s.items.filter((i) => !(i.phase === phase && i.floorId === floorId)),
+    lines:          s.lines.filter((l) => !(l.phase === phase && l.floorId === floorId)),
+    throwableLines: s.throwableLines.filter((l) => !(l.phase === phase && l.floorId === floorId)),
+    texts:          s.texts.filter((t) => !(t.phase === phase && t.floorId === floorId)),
+    _history: [],
+  })),
 
   addVideoMarker: (marker) => set((s) => ({ videoMarkers: [...s.videoMarkers, marker] })),
   clearVideoMarkers: () => set({ videoMarkers: [] }),

@@ -1674,7 +1674,7 @@ export default function MainCanvas({
 
         {/* Placed operator tokens — rendered at effective route position for currentRouteStep */}
         {(() => {
-          const viewScaleMultiplier = currentView === "isometric" ? 0.6 : 1.0;
+          const viewScaleMultiplier = currentView === "isometric" ? 0.4 : 1.0;
           return items
             .filter((i) => i.phase === currentPhase && i.floorId === currentFloorId)
             .filter((i) => !isExportingGif || exportVisibility === "all" || i.side === "neutral" || i.side === exportVisibility)
@@ -1905,7 +1905,7 @@ export default function MainCanvas({
                 floor?.images.blueprint  && { id: "blueprint" as ViewMode, label: t("view_blueprint", language) },
                 floor?.images.isometric  && { id: "isometric" as ViewMode, label: t("view_isometric", language) },
               ] as const).filter(Boolean) as { id: ViewMode; label: string }[]}
-              onChange={(id) => { if (id !== currentView) { useBoardStore.getState().clearBoard(); setView(id); } }}
+              onChange={(id) => setView(id)}
               icon={ImageIcon}
               minWidth={108}
             />
@@ -1936,13 +1936,6 @@ export default function MainCanvas({
 
         {/* Undo (Ctrl/Cmd+Z) */}
         <ToolBtn icon={Undo2} label="Undo (Ctrl+Z)" onClick={undo} />
-
-        {/* Clear All */}
-        <ToolBtn icon={Trash2} label="Clear All" onClick={() => {
-          if (window.confirm(t("Are you sure you want to clear all items?", language))) {
-            useBoardStore.getState().clearBoard();
-          }
-        }} />
 
         <div className="flex-1 shrink-0" />
 
@@ -2286,6 +2279,10 @@ export default function MainCanvas({
               <ToolBtn icon={icon} label={label} active={tool === id} onClick={() => setTool(id)} />
             </Fragment>
           ))}
+          <div className="w-full" style={{ height: 1, background: "var(--color-r6-border)", margin: "2px 0" }} />
+          <ToolBtn icon={Trash2} label="Clear floor" onClick={() => {
+            useBoardStore.getState().clearFloor(currentPhase, currentFloorId);
+          }} />
         </div>
 
         {/* Tactical panel — floats right side, shows tool-contextual controls */}
