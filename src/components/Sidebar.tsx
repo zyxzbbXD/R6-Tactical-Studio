@@ -8,6 +8,7 @@ import {
   Shield,
   Crosshair,
   FolderPlus,
+  FolderOpen,
   Upload,
   Settings,
   Layers,
@@ -40,39 +41,51 @@ function SectionHeader({
   return (
     <button
       onClick={onToggle}
-      className="flex w-full items-center gap-2 px-3 py-2 text-[14px] font-bold transition-colors"
+      className="flex w-full items-center gap-2 px-3 py-2 transition-colors"
       style={{ color: "var(--color-r6-muted)" }}
       onMouseEnter={(e) => (e.currentTarget.style.color = "var(--color-r6-text)")}
       onMouseLeave={(e) => (e.currentTarget.style.color = "var(--color-r6-muted)")}
     >
-      <Icon size={14} />
-      <span className="flex-1 text-left">{label}</span>
+      <Icon size={14} className="shrink-0" />
+      <span className="flex-1 text-left text-sm font-bold tracking-wide uppercase truncate whitespace-nowrap">{label}</span>
       {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
     </button>
   );
 }
 
-function AssetGrid({ items }: { items: (OperatorConfig | GadgetConfig)[] }) {
+function AssetGrid({
+  items,
+  containerWidth = 240,
+}: {
+  items: (OperatorConfig | GadgetConfig)[];
+  containerWidth?: number;
+}) {
   const setDraggingIcon    = useBoardStore((s) => s.setDraggingIcon);
   const setTool            = useBoardStore((s) => s.setTool);
   const setPendingOperator = useBoardStore((s) => s.setPendingOperator);
+
+  // Switch to 5 columns when the sidebar is wider than 125% of the default 320px base
+  const gridCols = containerWidth > 400 ? "grid-cols-5" : "grid-cols-4";
+
   return (
-    <div className="grid grid-cols-4 gap-1 px-3 pb-2">
+    <div className={`grid ${gridCols} gap-1 px-3 pb-2 transition-all duration-200`}>
       {items.map((op) => (
         <div
           key={op.id}
           title={op.name}
-          className="flex flex-col items-center gap-0.5 rounded-lg p-1.5 cursor-grab transition-colors"
+          className="flex flex-col items-center gap-0.5 rounded-lg p-1 cursor-grab transition-colors"
           style={{ background: "var(--color-r6-surface-2)" }}
           onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-3)")}
           onMouseLeave={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
           draggable
           onClick={() => {
-            setPendingOperator({ operatorId: op.id, iconPath: op.iconPath, name: op.name });
+            const side = "side" in op ? (op.side as "atk" | "def") : "neutral";
+            setPendingOperator({ operatorId: op.id, iconPath: op.iconPath, name: op.name, side });
             setTool("place_operator");
           }}
           onDragStart={(e) => {
-            dragState.operator = { operatorId: op.id, iconPath: op.iconPath, name: op.name };
+            const side = "side" in op ? (op.side as "atk" | "def") : "neutral";
+            dragState.operator = { operatorId: op.id, iconPath: op.iconPath, name: op.name, side };
             setDraggingIcon(true);
             e.dataTransfer.effectAllowed = "copy";
             e.dataTransfer.setData("text/plain", op.id);
@@ -85,7 +98,7 @@ function AssetGrid({ items }: { items: (OperatorConfig | GadgetConfig)[] }) {
           data-operator-side={"side" in op ? op.side : undefined}
         >
           <div
-            className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full"
+            className="w-full aspect-square flex items-center justify-center overflow-hidden rounded-full"
             style={{
               background: "var(--color-r6-surface-3)",
               border: "1px solid var(--color-r6-border)",
@@ -94,13 +107,13 @@ function AssetGrid({ items }: { items: (OperatorConfig | GadgetConfig)[] }) {
             <img
               src={op.iconPath}
               alt={op.name}
-              className="h-7 w-7 object-contain"
+              className="w-full h-full object-contain p-1"
               draggable={false}
             />
           </div>
           <span
-            className="truncate w-full text-center text-[11px] leading-tight"
-            style={{ color: "var(--color-r6-muted)" }}
+            className="truncate w-full text-center text-[11px] font-medium leading-tight mt-0.5"
+            style={{ color: "var(--color-r6-text)" }}
           >
             {op.name}
           </span>
@@ -112,7 +125,13 @@ function AssetGrid({ items }: { items: (OperatorConfig | GadgetConfig)[] }) {
 
 // ─── Main Sidebar ──────────────────────────────────────────────────────────────
 
-export default function Sidebar() {
+export default function Sidebar({
+  width = 240,
+  transition,
+}: {
+  width?: number;
+  transition?: string;
+}) {
   const [projectsOpen,   setProjectsOpen]   = useState(true);
   const [assetsOpen,     setAssetsOpen]     = useState(true);
   const [gadgetsOpen,    setGadgetsOpen]    = useState(true);
@@ -133,12 +152,12 @@ export default function Sidebar() {
   useEffect(() => { init(); }, []);
 
   const grouped = useMemo(() => {
-    const map = new Map<string, { label: string; projects: ProjectMeta[] }>();
+    const map = new Map<string, { id: string; label: string; projects: ProjectMeta[] }>();
     for (const proj of projectsList) {
       const mapConfig = MAPS.find((m) => m.id === proj.mapId);
       const key   = mapConfig?.id   ?? "__drafts__";
       const label = mapConfig?.name ?? "Drafts";
-      if (!map.has(key)) map.set(key, { label, projects: [] });
+      if (!map.has(key)) map.set(key, { id: key, label, projects: [] });
       map.get(key)!.projects.push(proj);
     }
     return [...map.values()];
@@ -147,6 +166,24 @@ export default function Sidebar() {
   const [isCreating, setIsCreating] = useState(false);
   const [newName, setNewName]       = useState("");
   const newNameRef                  = useRef<HTMLInputElement>(null);
+  const loadFileRef                 = useRef<HTMLInputElement>(null);
+
+  const handleLoadFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string);
+        useBoardStore.getState().loadProjectData(data);
+      } catch {
+        console.error("❌ [Sidebar] Failed to load project JSON");
+        alert("Import failed: invalid or corrupted JSON file.");
+      }
+    };
+    reader.readAsText(file);
+  };
 
   const openNewProject = () => {
     setNewName("");
@@ -165,11 +202,28 @@ export default function Sidebar() {
     setNewName("");
   };
 
+  // Track the last non-zero width so the inner layout container keeps its size
+  // while the outer <aside> acts as a sliding clip window during collapse animation.
+  const stableWidthRef = useRef(width || 240);
+  if (width > 0) stableWidthRef.current = width;
+
   return (
     <aside
-      className="flex h-full shrink-0 flex-col"
+      className="h-full shrink-0"
       style={{
-        width: 240,
+        width,
+        overflow: "hidden",
+        transition,
+        opacity: width === 0 ? 0 : 1,
+        flexShrink: 0,
+      }}
+    >
+    {/* Inner div keeps the stable (non-zero) width so the icon grid never reflows
+        during the collapse slide — the outer <aside> clips it like a viewport. */}
+    <div
+      className="flex h-full flex-col"
+      style={{
+        width: stableWidthRef.current,
         background: "var(--color-r6-surface)",
         borderRight: "1px solid var(--color-r6-border)",
       }}
@@ -225,14 +279,14 @@ export default function Sidebar() {
               )}
 
               {grouped.map((group) => (
-                <div key={group.label}>
+                <div key={group.id}>
                   {/* Map group header */}
                   <div
                     className="flex items-center gap-1.5 px-3 pt-2 pb-0.5 text-[12px] font-semibold uppercase tracking-wider"
                     style={{ color: "var(--color-r6-muted-2)" }}
                   >
                     <MapIcon size={12} />
-                    <span>{group.label}</span>
+                    <span>{(() => { const tk = `map_${group.id}`; const tv = t(tk, language); return tv !== tk ? tv : group.label; })()}</span>
                   </div>
 
                   {/* Project rows */}
@@ -323,22 +377,47 @@ export default function Sidebar() {
                   </button>
                 </div>
               ) : (
-                <button
-                  onClick={openNewProject}
-                  className="mt-1 flex w-full items-center gap-2 px-3 py-1.5 text-[13px] rounded-lg transition-colors"
-                  style={{ color: "var(--color-r6-muted)" }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.color = "var(--color-r6-accent)";
-                    e.currentTarget.style.background = "var(--color-r6-accent-dim)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.color = "var(--color-r6-muted)";
-                    e.currentTarget.style.background = "transparent";
-                  }}
-                >
-                  <FolderPlus size={14} />
-                  <span>{t("New Project", language)}</span>
-                </button>
+                <>
+                  <button
+                    onClick={openNewProject}
+                    className="mt-1 flex w-full items-center gap-2 px-3 py-1.5 text-[13px] rounded-lg transition-colors"
+                    style={{ color: "var(--color-r6-muted)" }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = "var(--color-r6-accent)";
+                      e.currentTarget.style.background = "var(--color-r6-accent-dim)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = "var(--color-r6-muted)";
+                      e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <FolderPlus size={14} />
+                    <span>{t("New Project", language)}</span>
+                  </button>
+                  <input
+                    ref={loadFileRef}
+                    type="file"
+                    accept=".json"
+                    className="hidden"
+                    onChange={handleLoadFile}
+                  />
+                  <button
+                    onClick={() => loadFileRef.current?.click()}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-[13px] rounded-lg transition-colors"
+                    style={{ color: "var(--color-r6-muted)" }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = "var(--color-r6-accent)";
+                      e.currentTarget.style.background = "var(--color-r6-accent-dim)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = "var(--color-r6-muted)";
+                      e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <FolderOpen size={14} />
+                    <span>{t("load_project", language)}</span>
+                  </button>
+                </>
               )}
             </div>
           )}
@@ -363,7 +442,7 @@ export default function Sidebar() {
                   <button
                     key={tab}
                     onClick={() => setActiveAssetTab(tab)}
-                    className="flex-1 py-1.5 text-[13px] font-medium transition-colors"
+                    className="flex-1 py-1.5 text-xs font-bold tracking-wider uppercase transition-colors"
                     style={{
                       background: activeAssetTab === tab ? "var(--color-r6-surface-3)" : "transparent",
                       color: activeAssetTab === tab ? "var(--color-r6-text)" : "var(--color-r6-muted)",
@@ -371,18 +450,18 @@ export default function Sidebar() {
                     }}
                   >
                     {tab === "atk" ? (
-                      <span className="flex items-center justify-center gap-1">
+                      <span className="flex items-center justify-center gap-1 whitespace-nowrap">
                         <Users size={12} /> ATK
                       </span>
                     ) : (
-                      <span className="flex items-center justify-center gap-1">
+                      <span className="flex items-center justify-center gap-1 whitespace-nowrap">
                         <Shield size={12} /> DEF
                       </span>
                     )}
                   </button>
                 ))}
               </div>
-              <AssetGrid items={activeAssetTab === "atk" ? ATK_OPERATORS : DEF_OPERATORS} />
+              <AssetGrid items={activeAssetTab === "atk" ? ATK_OPERATORS : DEF_OPERATORS} containerWidth={width} />
             </div>
           )}
         </div>
@@ -395,7 +474,7 @@ export default function Sidebar() {
             open={gadgetsOpen}
             onToggle={() => setGadgetsOpen(!gadgetsOpen)}
           />
-          {gadgetsOpen && <AssetGrid items={GADGETS} />}
+          {gadgetsOpen && <AssetGrid items={GADGETS} containerWidth={width} />}
         </div>
       </div>
 
@@ -427,6 +506,7 @@ export default function Sidebar() {
           {t("Import Custom Map", language)}
         </button>
       </div>
+    </div>
     </aside>
   );
 }

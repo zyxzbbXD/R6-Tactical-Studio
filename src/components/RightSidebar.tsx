@@ -10,7 +10,13 @@ import { t } from "../locales/i18n";
 
 // ─── RightSidebar ───────────────────────────────────────────────────────────────
 
-export default function RightSidebar() {
+export default function RightSidebar({
+  width = 320,
+  transition,
+}: {
+  width?: number;
+  transition?: string;
+}) {
   const { apiKey, baseUrl, model, isRightSidebarOpen } = useSettingsStore();
   const language = useSettingsStore((s) => s.language);
   const items    = useBoardStore((s) => s.items);
@@ -97,15 +103,18 @@ export default function RightSidebar() {
 
   return (
     <aside
-      className={`flex h-full shrink-0 flex-col transition-all duration-300 ease-in-out ${
-        isRightSidebarOpen ? "w-[320px] opacity-100" : "w-0 opacity-0 overflow-hidden"
-      }`}
+      className="flex h-full shrink-0 flex-col"
       style={{
+        width: isRightSidebarOpen ? width : 0,
+        opacity: isRightSidebarOpen ? 1 : 0,
+        overflow: "hidden",
+        transition: transition ?? "opacity 200ms ease",
         background: "var(--color-r6-surface)",
         borderLeft: isRightSidebarOpen ? "1px solid var(--color-r6-border)" : "none",
+        flexShrink: 0,
       }}
     >
-    <div className="flex h-full w-[320px] flex-col">
+    <div className="flex h-full flex-col" style={{ width }}>
       {/* ── AI Agent section ─────────────────────────────────────────────────── */}
       <div
         className="flex shrink-0 flex-col"
@@ -117,7 +126,7 @@ export default function RightSidebar() {
           style={{ borderBottom: "1px solid var(--color-r6-border)" }}
         >
           <Bot size={17} style={{ color: "var(--color-r6-accent)" }} />
-          <span className="text-[14px] font-semibold tracking-wide uppercase" style={{ color: "var(--color-r6-muted)" }}>
+          <span className="text-sm font-bold tracking-wide uppercase whitespace-nowrap" style={{ color: "var(--color-r6-muted)" }}>
             {t("AI Tactic Agent", language)}
           </span>
         </div>
@@ -216,7 +225,7 @@ export default function RightSidebar() {
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder={"AI output appears here.\nYou can also type notes manually."}
-              className="h-full w-full resize-none px-4 py-3 text-[13px] leading-relaxed outline-none"
+              className="h-full w-full resize-none px-4 py-3 text-sm leading-relaxed outline-none"
               style={{
                 background: "transparent",
                 color: "var(--color-r6-text)",
@@ -226,7 +235,7 @@ export default function RightSidebar() {
             />
           ) : notes ? (
             <div
-              className="prose-r6 px-4 py-3 text-[13px] leading-relaxed"
+              className="prose-r6 px-4 py-3 text-sm leading-relaxed"
               style={{ color: "var(--color-r6-text)" }}
             >
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{notes}</ReactMarkdown>

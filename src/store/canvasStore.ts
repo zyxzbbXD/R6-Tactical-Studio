@@ -32,6 +32,8 @@ interface CanvasState {
   // ── Actions ────────────────────────────────────────────────────────────────
   setMap: (mapId: string) => void;
   setFloor: (floorId: string) => void;
+  /** Atomically set both map and floor in a single state update to avoid intermediate renders. */
+  setMapAndFloor: (mapId: string, floorId: string) => void;
   setView: (view: ViewMode) => void;
   toggleOverlay: (key: OverlayKey) => void;
   setBlueprintScaleMode: (mode: "default" | "standard") => void;
@@ -72,6 +74,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   setFloor: (floorId) => set({ currentFloorId: floorId }),
+
+  setMapAndFloor: (mapId, floorId) => {
+    const map = get().maps.find((m) => m.id === mapId);
+    const validFloor = map?.floors.find((f) => f.id === floorId);
+    set({
+      currentMapId:   mapId,
+      currentFloorId: validFloor?.id ?? map?.floors[0]?.id ?? null,
+      currentView:    "default",
+      overlays:       { ...DEFAULT_OVERLAYS },
+    });
+  },
   setView: (view) => set({ currentView: view }),
   setBlueprintScaleMode: (mode) => set({ blueprintScaleMode: mode }),
   toggleOverlay: (key) =>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Stage, Layer,
   Image as KonvaImage,
@@ -16,17 +16,33 @@ import useImage from "use-image";
 import {
   Pencil, ArrowRight, Eraser, Undo2,
   ZoomIn, ZoomOut, Maximize2,
-  Video, MapPin, ChevronDown, MousePointer2, Loader2, Bot, FileDown, Save,
-  FileImage, FileText, Film,
+  Video, MapPin, ChevronDown, MousePointer2, Loader2, Bot, FileDown, Save, Upload,
+  FileImage, FileText, Film, FileJson,
   Image as ImageIcon, Layers2, Type, Flag, Box, ArrowUpDown,
+  PanelLeftClose, PanelLeftOpen, LayoutTemplate,
+  Spline, Route, MessageSquare,
 } from "lucide-react";
 import { dragState } from "../store/dragState";
-import { getBlueprintBoundingBox, type BoundingBox } from "../utils/imageUtils";
+// Hardcoded blueprint scale factors per map id.
+// Each value scales the blueprint image so it visually fills the 6400×3600 canvas.
+// Maps not listed fall back to 1.0.
+const BLUEPRINT_MANUAL_SCALES: Record<string, number> = {
+  bank:       1.0,
+  chalet:     1.0,
+  clubhouse:  1.25,
+  consulate:  2.75,
+  fortress:   3.0,
+  lair:       3.0,
+};
 import FloatingVideoPlayer from "./FloatingVideoPlayer";
+import FloatingExportWindow from "./FloatingExportWindow";
+import TacticalPanel from "./TacticalPanel";
+import MapPreloader from "./MapPreloader";
+import { useShallow } from "zustand/react/shallow";
 import { useCanvasStore, type ViewMode, type OverlayKey } from "../store/canvasStore";
 import {
   useBoardStore,
-  type BoardItem, type Tool,
+  type BoardItem, type Tool, type Waypoint,
 } from "../store/useBoardStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useProjectStore } from "../store/useProjectStore";
@@ -37,7 +53,7 @@ import { t } from "../locales/i18n";
 const ZOOM_FACTOR = 1.10;
 const ZOOM_MIN    = 0.05;
 const ZOOM_MAX    = 8;
-const ICON_SIZE   = 56;   // operator token size in canvas-space pixels
+const ICON_SIZE = 56;   // operator token load size (SVG rasterization); default scale=3 → 168px
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -242,6 +258,24 @@ function toCanvasPos(stage: Konva.Stage): Vec2 {
 }
 
 /**
+ * Expand a BoardItem's sparse route dict into 6 positions (index 0 = base, 1–5 = steps).
+ * If step N has no waypoint, it inherits from step N-1 ("holding angle").
+ * Dead status is inherited forward: once dead, stays dead unless overridden.
+ */
+function getEffectiveRoute(item: BoardItem): Array<{ x: number; y: number; status: "normal" | "dead" | "planting" }> {
+  type EffPt = { x: number; y: number; status: "normal" | "dead" | "planting" };
+  const pts: EffPt[] = [{ x: item.x, y: item.y, status: "normal" }];
+  for (let i = 1; i <= 5; i++) {
+    const prev = pts[i - 1];
+    const wp = item.route[i];
+    const newStatus: "normal" | "dead" | "planting" =
+      wp?.status ?? (prev.status === "dead" ? "dead" : "normal");
+    pts.push({ x: wp?.x ?? prev.x, y: wp?.y ?? prev.y, status: newStatus });
+  }
+  return pts;
+}
+
+/**
  * Load an SVG (or any image) into an HTMLImageElement with explicit dimensions
  * so that browsers rasterize SVGs correctly before Konva draws them.
  */
@@ -272,7 +306,7 @@ function ToolBtn({
       title={label}
       onClick={onClick}
       disabled={disabled}
-      className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+      className="flex shrink-0 h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
       style={{
         background: active ? "var(--color-r6-accent-dim)" : "transparent",
         color:      active ? "var(--color-r6-accent)"     : "var(--color-r6-muted)",
@@ -315,7 +349,7 @@ function Dropdown<T extends string>({
     <div ref={ref} className="relative shrink-0">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[14px] font-medium"
+        className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[14px] font-medium"
         style={{
           background: "var(--color-r6-surface-2)",
           color:      value ? "var(--color-r6-text)" : "var(--color-r6-muted)",
@@ -355,12 +389,27 @@ function Dropdown<T extends string>({
   );
 }
 
+// ─── useRetainedImage ──────────────────────────────────────────────────────────
+// Wraps useImage so it returns the *previous* image while the next one is loading,
+// eliminating the white-flash between floor/map switches.
+// An empty path clears the retention immediately so disabled overlays disappear cleanly.
+function useRetainedImage(path: string): HTMLImageElement | undefined {
+  const [image, status] = useImage(path);
+  const retainedRef = useRef<HTMLImageElement | undefined>(undefined);
+  if (!path) {
+    retainedRef.current = undefined;
+    return undefined;
+  }
+  if (status === "loaded" && image) retainedRef.current = image;
+  return status === "loaded" ? image : retainedRef.current;
+}
+
 // ─── Map background layer (isolated so useImage only re-runs on path change) ──
 // Receives pre-computed paths; empty string = don't load that layer.
 // Stacking order: base → props → stairs → vert → names
 
-function MapImageLayer({
-  basePath, vertPath, propsPath, stairsPath, namesPath, currentView, blueprintScaleMode,
+const MapImageLayer = memo(function MapImageLayer({
+  basePath, vertPath, propsPath, stairsPath, namesPath, currentView, currentMapId, blueprintScaleMode, onCenterCalculated,
 }: {
   basePath: string;
   vertPath: string;
@@ -368,30 +417,68 @@ function MapImageLayer({
   stairsPath: string;
   namesPath: string;
   currentView: ViewMode;
+  currentMapId: string;
   blueprintScaleMode: "default" | "standard";
+  onCenterCalculated?: (center: { x: number; y: number }) => void;
 }) {
-  const [baseImage]   = useImage(basePath);
-  const [vertImage]   = useImage(vertPath);
-  const [propsImage]  = useImage(propsPath);
-  const [stairsImage] = useImage(stairsPath);
-  const [namesImage]  = useImage(namesPath);
-  const [bbox, setBbox] = useState<BoundingBox | null>(null);
+  const baseImage   = useRetainedImage(basePath);
+  const vertImage   = useRetainedImage(vertPath);
+  const propsImage  = useRetainedImage(propsPath);
+  const stairsImage = useRetainedImage(stairsPath);
+  const namesImage  = useRetainedImage(namesPath);
 
+  // Pixel-scan the base image to find the actual building bounding-box center.
+  // We draw to an offscreen canvas and step through the alpha channel in strides of STEP
+  // to avoid blocking the main thread on large images.
+  const [buildingCenter, setBuildingCenter] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
-    if (!baseImage || currentView !== "blueprint") { setBbox(null); return; }
-    setBbox(getBlueprintBoundingBox(baseImage));
-  }, [baseImage, currentView]);
+    if (!baseImage) return;
+    setBuildingCenter(null);
+    const STEP = 6;
+    const w = baseImage.naturalWidth;
+    const h = baseImage.naturalHeight;
+    try {
+      const cvs = document.createElement("canvas");
+      cvs.width = w; cvs.height = h;
+      const ctx = cvs.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(baseImage, 0, 0);
+      const { data } = ctx.getImageData(0, 0, w, h);
+      let minX = w, maxX = 0, minY = h, maxY = 0;
+      for (let y = 0; y < h; y += STEP) {
+        for (let x = 0; x < w; x += STEP) {
+          if (data[(y * w + x) * 4 + 3] > 10) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      const computed = maxX > minX && maxY > minY
+        ? { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
+        : { x: w / 2, y: h / 2 };
+      setBuildingCenter(computed);
+      onCenterCalculated?.(computed);
+    } catch {
+      // Canvas CORS security error — fall back to geometric center
+      const fallback = { x: w / 2, y: h / 2 };
+      setBuildingCenter(fallback);
+      onCenterCalculated?.(fallback);
+    }
+  }, [baseImage]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!baseImage) return null;
   const isBlueprint = currentView === "blueprint";
 
-  // Compute transform for standard scale mode
-  const useStandard = isBlueprint && blueprintScaleMode === "standard" && bbox;
-  const TARGET_SIZE = 3000;
-  const scaleFactor = useStandard ? TARGET_SIZE / Math.max(bbox.width, bbox.height) : 1;
-  const imgProps = useStandard
-    ? { x: 3200, y: 1800, offsetX: bbox.centerX, offsetY: bbox.centerY, scaleX: scaleFactor, scaleY: scaleFactor }
-    : { x: 0,    y: 0,    offsetX: 0,             offsetY: 0,             scaleX: 1,            scaleY: 1 };
+  // "standard": scale image by dict factor, pivot on the detected building center → places
+  //             building at canvas midpoint (3200, 1800). Stage is NEVER touched.
+  // "default":  raw 1:1 at (0,0).
+  const blueprintManualScale = BLUEPRINT_MANUAL_SCALES[currentMapId] ?? 1.0;
+  const center = buildingCenter ?? { x: baseImage.naturalWidth / 2, y: baseImage.naturalHeight / 2 };
+  const imgProps = isBlueprint && blueprintScaleMode === "standard"
+    ? { x: 3200, y: 1800, offsetX: center.x, offsetY: center.y, scaleX: blueprintManualScale, scaleY: blueprintManualScale }
+    : { x: 0,    y: 0,    offsetX: 0,        offsetY: 0,        scaleX: 1,                    scaleY: 1                    };
 
   return (
     <>
@@ -399,64 +486,77 @@ function MapImageLayer({
       {isBlueprint && (
         <KonvaRect x={0} y={0} width={6400} height={3600} fill="#15539e" listening={false} />
       )}
-      <KonvaImage image={baseImage}  {...imgProps} listening={false} />
-      {propsImage  && <KonvaImage image={propsImage}  {...imgProps} listening={false} />}
-      {stairsImage && <KonvaImage image={stairsImage} {...imgProps} listening={false} />}
-      {vertImage   && <KonvaImage image={vertImage}   {...imgProps} listening={false} />}
-      {namesImage  && <KonvaImage image={namesImage}  {...imgProps} listening={false} />}
+      <KonvaImage image={baseImage}  {...imgProps} listening={false} perfectDrawEnabled={false} />
+      {propsImage  && <KonvaImage image={propsImage}  {...imgProps} listening={false} perfectDrawEnabled={false} />}
+      {stairsImage && <KonvaImage image={stairsImage} {...imgProps} listening={false} perfectDrawEnabled={false} />}
+      {vertImage   && <KonvaImage image={vertImage}   {...imgProps} listening={false} perfectDrawEnabled={false} />}
+      {namesImage  && <KonvaImage image={namesImage}  {...imgProps} listening={false} perfectDrawEnabled={false} />}
       {/* Inset white border — sits 100px inside the paper edges */}
       {isBlueprint && (
         <KonvaRect x={100} y={100} width={6200} height={3400} stroke="rgba(255,255,255,0.7)" strokeWidth={8} listening={false} />
       )}
     </>
   );
-}
+});
 
 // ─── Placed operator token ─────────────────────────────────────────────────────
 
 function OperatorToken({
-  item, isSelected, tool, onSelect, onUpdate, onRemove,
+  item, isSelected, isTransforming, tool, status, onSelect, onUpdate, onRemove, onDblClick, onContextMenu, displayX, displayY,
 }: {
   item: BoardItem;
   isSelected: boolean;
+  isTransforming: boolean;
   tool: Tool;
+  status: "normal" | "dead" | "planting";
   onSelect: (id: string | null) => void;
   onUpdate: (id: string, updates: Partial<BoardItem>) => void;
   onRemove: (id: string) => void;
+  onDblClick: (id: string) => void;
+  onContextMenu: (id: string, clientX: number, clientY: number) => void;
+  displayX: number;
+  displayY: number;
 }) {
   const image    = useOperatorIcon(item.iconPath);
   const groupRef = useRef<Konva.Group>(null);
   const trRef    = useRef<Konva.Transformer>(null);
 
-  // Attach / detach Transformer whenever selection changes
+  // Attach / detach Transformer on double-click only (isTransforming), not on single-click
   useEffect(() => {
     if (!trRef.current || !groupRef.current) return;
-    trRef.current.nodes(isSelected ? [groupRef.current] : []);
+    trRef.current.nodes(isTransforming ? [groupRef.current] : []);
     trRef.current.getLayer()?.batchDraw();
-  }, [isSelected]);
+  }, [isTransforming]);
 
-  const interactive = tool === "cursor" || tool === "eraser";
-  const half = ICON_SIZE / 2;
+  const interactive  = tool === "cursor" || tool === "eraser" || tool === "route";
+  const tokenSize    = ICON_SIZE * item.scale;   // respects per-token size slider
+  const half         = tokenSize / 2;
 
   return (
     <>
       <KonvaGroup
         ref={groupRef}
         id={item.id}
-        x={item.x}
-        y={item.y}
+        x={displayX}
+        y={displayY}
         offsetX={half}
         offsetY={half}
         rotation={item.rotation}
         scaleX={item.scaleX}
         scaleY={item.scaleY}
+        opacity={status === "dead" ? 0.5 : 1}
         draggable={tool === "cursor"}
         listening={interactive}
+        onContextMenu={(e) => {
+          e.evt.preventDefault();
+          onContextMenu(item.id, e.evt.clientX, e.evt.clientY);
+        }}
         onMouseEnter={(e) => {
           if (!interactive) return;
           const stage = e.target.getStage();
           if (stage) stage.container().style.cursor =
-            tool === "eraser" ? "crosshair" : "move";
+            tool === "eraser" ? "crosshair" :
+            tool === "route"  ? "cell"      : "move";
         }}
         onMouseLeave={(e) => {
           const stage = e.target.getStage();
@@ -464,8 +564,12 @@ function OperatorToken({
         }}
         onClick={(e) => {
           e.cancelBubble = true;
-          if (tool === "cursor") onSelect(item.id);
+          if (tool === "cursor" || tool === "route") onSelect(item.id);
           if (tool === "eraser") onRemove(item.id);
+        }}
+        onDblClick={(e) => {
+          e.cancelBubble = true;
+          if (tool === "cursor") onDblClick(item.id);
         }}
         onTap={(e) => { e.cancelBubble = true; onSelect(item.id); }}
         onDragEnd={(e) => {
@@ -480,41 +584,78 @@ function OperatorToken({
           });
         }}
       >
-        {/* Background circle — always visible, gives the token a solid base */}
-        <KonvaCircle
-          x={half} y={half} radius={half}
-          fill="#1c1c21"
-          stroke={isSelected ? "#e85d2a" : "#3f3f46"}
-          strokeWidth={1.5}
-        />
-        {/* Operator icon — rendered once the image has loaded */}
-        {image ? (
-          <KonvaImage
-            image={image}
-            x={0} y={0}
-            width={ICON_SIZE}
-            height={ICON_SIZE}
-            listening={false}
+        {/* Inner clipped group — strict circle mask for background + logo only */}
+        <KonvaGroup clipFunc={(ctx) => { ctx.arc(half, half, half, 0, Math.PI * 2, false); }}>
+          <KonvaCircle
+            x={half} y={half} radius={half}
+            fill="#1c1c21"
+            stroke="#3f3f46"
+            strokeWidth={1.5}
           />
-        ) : (
-          /* Fallback: initials text — proves the token placed even if image fails */
-          <KonvaText
-            x={0} y={0}
-            width={ICON_SIZE}
-            height={ICON_SIZE}
-            text={item.name.slice(0, 2).toUpperCase()}
-            fontSize={16}
-            fontStyle="bold"
-            fill="#f4f4f5"
-            align="center"
-            verticalAlign="middle"
+          {image ? (
+            <KonvaImage
+              image={image}
+              x={0} y={0}
+              width={tokenSize}
+              height={tokenSize}
+              listening={false}
+            />
+          ) : (
+            <KonvaText
+              x={0} y={0}
+              width={tokenSize}
+              height={tokenSize}
+              text={item.name.slice(0, 2).toUpperCase()}
+              fontSize={16}
+              fontStyle="bold"
+              fill="#f4f4f5"
+              align="center"
+              verticalAlign="middle"
+              listening={false}
+            />
+          )}
+        </KonvaGroup>
+
+        {/* Selection ring — outside inner clip so it draws at full 5%-larger radius */}
+        {isSelected && (
+          <KonvaCircle
+            x={half} y={half} radius={half * 1.05}
+            stroke="#e85d2a" strokeWidth={2}
             listening={false}
           />
         )}
+
+        {/* Dead overlay — outside inner clip */}
+        {status === "dead" && (
+          <>
+            <Line points={[tokenSize * 0.15, tokenSize * 0.15, tokenSize * 0.85, tokenSize * 0.85]}
+              stroke="#ef4444" strokeWidth={Math.max(4, tokenSize * 0.07)} lineCap="round" listening={false} />
+            <Line points={[tokenSize * 0.85, tokenSize * 0.15, tokenSize * 0.15, tokenSize * 0.85]}
+              stroke="#ef4444" strokeWidth={Math.max(4, tokenSize * 0.07)} lineCap="round" listening={false} />
+          </>
+        )}
+
+        {/* Planting badge — outside inner clip so the corner bubble can overflow */}
+        {status === "planting" && (
+          <>
+            <KonvaCircle
+              x={tokenSize * 0.8} y={tokenSize * 0.2} radius={tokenSize * 0.22}
+              fill="#facc15" listening={false}
+            />
+            <KonvaText
+              x={tokenSize * 0.58} y={tokenSize * 0.02}
+              width={tokenSize * 0.44} height={tokenSize * 0.36}
+              text="P" fontSize={Math.round(tokenSize * 0.26)}
+              fontStyle="bold" fill="#1c1917"
+              align="center" verticalAlign="middle"
+              listening={false}
+            />
+          </>
+        )}
       </KonvaGroup>
 
-      {/* Per-item transformer (only rendered when selected) */}
-      {isSelected && (
+      {/* Per-item transformer — only shown on double-click, not single-click */}
+      {isTransforming && (
         <Transformer
           ref={trRef}
           rotateEnabled
@@ -535,7 +676,18 @@ function OperatorToken({
 
 // ─── Main component ────────────────────────────────────────────────────────────
 
-export default function MainCanvas() {
+export default function MainCanvas({
+  isLeftOpen = true,
+  onToggleLeft,
+  onResetWorkspace,
+}: {
+  isLeftOpen?: boolean;
+  onToggleLeft?: () => void;
+  onResetWorkspace?: () => void;
+}) {
+  // 🚨 Render tracker — remove after confirming scroll no longer spams re-renders
+  console.log("🚨 MainCanvas Rendered");
+
   // ── Canvas store (map / floor / view) ─────────────────────────────────────
   const {
     maps,
@@ -544,114 +696,208 @@ export default function MainCanvas() {
     currentView, overlays,
     blueprintScaleMode,
     setMap, setFloor, setView, toggleOverlay, setBlueprintScaleMode,
-  } = useCanvasStore();
+  } = useCanvasStore(useShallow((s) => ({
+    maps: s.maps,
+    currentMapId: s.currentMapId, currentFloorId: s.currentFloorId,
+    currentMap: s.currentMap, currentFloor: s.currentFloor,
+    currentView: s.currentView, overlays: s.overlays,
+    blueprintScaleMode: s.blueprintScaleMode,
+    setMap: s.setMap, setFloor: s.setFloor, setView: s.setView,
+    toggleOverlay: s.toggleOverlay, setBlueprintScaleMode: s.setBlueprintScaleMode,
+  })));
 
   // ── Settings store ─────────────────────────────────────────────────────────
-  const { isRightSidebarOpen, toggleRightSidebar, language } = useSettingsStore();
+  const { isRightSidebarOpen, toggleRightSidebar, language } = useSettingsStore(
+    useShallow((s) => ({ isRightSidebarOpen: s.isRightSidebarOpen, toggleRightSidebar: s.toggleRightSidebar, language: s.language })),
+  );
 
   // ── Project store (save) ───────────────────────────────────────────────────
   const saveCurrentProject = useProjectStore((s) => s.saveCurrentProject);
   const currentProjectId   = useProjectStore((s) => s.currentProjectId);
   const [isSaving,      setIsSaving]      = useState(false);
   const [isExportOpen,  setIsExportOpen]  = useState(false);
-  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const exportMenuRef    = useRef<HTMLDivElement>(null);
+  const jsonImportRef    = useRef<HTMLInputElement>(null);
 
   // ── Board store (items / lines / tool / notes) ────────────────────────────
   const {
     tool, setTool,
-    penColor, penSize,
-    items, lines,
+    brushColor, brushSize,
+    throwableColor, throwableSize,
+    currentRouteStep, setCurrentRouteStep, showFullRoute,
+    exportPhases, exportVisibility, gifExportRequested, setGifExportRequested,
+    imageExportRequested, setImageExportRequested,
+    allPhasesExportRequested, setAllPhasesExportRequested,
+    setExportWindowOpen,
+    items, lines, throwableLines, texts,
     isDraggingIcon,
     pendingOperator, setPendingOperator,
     isVideoOpen, toggleVideo,
     notes,
     addItem, updateItem, removeItem,
     addLine, removeLine,
+    addThrowableLine, removeThrowableLine,
+    addRoutePoint, clearRoute,
+    addText, updateText, removeText,
+    setRouteStepStatus,
+    isPlaying, setIsPlaying,
     undo,
     currentPhase, setPhase,
-  } = useBoardStore();
+    setResizingItemId,
+    transformingItemId, setTransformingItemId,
+  } = useBoardStore(useShallow((s) => ({
+    tool: s.tool, setTool: s.setTool,
+    brushColor: s.brushColor, brushSize: s.brushSize,
+    throwableColor: s.throwableColor, throwableSize: s.throwableSize,
+    currentRouteStep: s.currentRouteStep, setCurrentRouteStep: s.setCurrentRouteStep, showFullRoute: s.showFullRoute,
+    exportPhases: s.exportPhases, exportVisibility: s.exportVisibility,
+    gifExportRequested: s.gifExportRequested, setGifExportRequested: s.setGifExportRequested,
+    imageExportRequested: s.imageExportRequested, setImageExportRequested: s.setImageExportRequested,
+    allPhasesExportRequested: s.allPhasesExportRequested, setAllPhasesExportRequested: s.setAllPhasesExportRequested,
+    setExportWindowOpen: s.setExportWindowOpen,
+    items: s.items, lines: s.lines, throwableLines: s.throwableLines, texts: s.texts,
+    isDraggingIcon: s.isDraggingIcon,
+    pendingOperator: s.pendingOperator, setPendingOperator: s.setPendingOperator,
+    isVideoOpen: s.isVideoOpen, toggleVideo: s.toggleVideo,
+    notes: s.notes,
+    addItem: s.addItem, updateItem: s.updateItem, removeItem: s.removeItem,
+    addLine: s.addLine, removeLine: s.removeLine,
+    addThrowableLine: s.addThrowableLine, removeThrowableLine: s.removeThrowableLine,
+    addRoutePoint: s.addRoutePoint, clearRoute: s.clearRoute,
+    addText: s.addText, updateText: s.updateText, removeText: s.removeText,
+    setRouteStepStatus: s.setRouteStepStatus,
+    isPlaying: s.isPlaying, setIsPlaying: s.setIsPlaying,
+    undo: s.undo,
+    currentPhase: s.currentPhase, setPhase: s.setPhase,
+    setResizingItemId: s.setResizingItemId,
+    transformingItemId: s.transformingItemId, setTransformingItemId: s.setTransformingItemId,
+  })));
 
   // ── Local UI state ────────────────────────────────────────────────────────
   const [selectedId,    setSelectedId]    = useState<string | null>(null);
-  const [scale,         setScale]         = useState(1);
-  const [position,      setPosition]      = useState<Vec2>({ x: 0, y: 0 });
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ itemId: string; x: number; y: number } | null>(null);
+
+  // Wrapper: reset route step and clear resize mode when switching operators
+  const handleSelectOperator = useCallback((id: string | null) => {
+    setSelectedId((prev) => {
+      if (id !== prev) {
+        setCurrentRouteStep(1);
+        setResizingItemId(null);
+        setTransformingItemId(null);
+      }
+      return id;
+    });
+  }, [setCurrentRouteStep, setResizingItemId, setTransformingItemId]);
+  const handleContextMenu = useCallback((itemId: string, clientX: number, clientY: number) => {
+    setCtxMenu({ itemId, x: clientX, y: clientY });
+  }, []);
+
+  // Scale/position managed via refs + direct Konva API — bypasses React render on every zoom tick.
+  // zoomPercent is React state only for the toolbar display; Konva itself is updated imperatively.
+  const scaleRef      = useRef(1);
+  const positionRef   = useRef<Vec2>({ x: 0, y: 0 });
+  // Throttle the toolbar zoom% display to at most one React re-render per 100 ms during wheel spin.
+  const zoomUiTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [zoomPercent, setZoomPercent]     = useState(100);
   const [containerSize, setContainerSize] = useState<Size>({ width: 0, height: 0 });
   const [isExporting,   setIsExporting]   = useState(false);
   const [phaseOpen,     setPhaseOpen]     = useState(false);
   const [isExportingGif, setIsExportingGif] = useState(false);
 
+  // ── Blueprint transform — lifted from MapImageLayer so items co-transform ──
+  // buildingCenter is the pixel bounding-box center of the blueprint image,
+  // calculated by MapImageLayer and reported upward via onCenterCalculated.
+  const [buildingCenter, setBuildingCenter] = useState<{ x: number; y: number } | null>(null);
+  // Reset when the map or floor changes so stale center from prior image isn't used.
+  useEffect(() => { setBuildingCenter(null); }, [currentMapId, currentFloorId]);
+
+  const isStandardBp = currentView === "blueprint" && blueprintScaleMode === "standard";
+  const bpScale   = isStandardBp ? (BLUEPRINT_MANUAL_SCALES[currentMapId ?? ""] ?? 1.0) : 1.0;
+  const bpOffsetX = buildingCenter?.x ?? 0;
+  const bpOffsetY = buildingCenter?.y ?? 0;
+  // Shared Konva transform applied to BOTH the image layer and the items Group.
+  // In "default" mode this is identity — no visual change.
+  const bpTransformProps = isStandardBp
+    ? { x: 3200, y: 1800, offsetX: bpOffsetX, offsetY: bpOffsetY, scaleX: bpScale, scaleY: bpScale }
+    : { x: 0,    y: 0,    offsetX: 0,         offsetY: 0,         scaleX: 1,       scaleY: 1       };
+
   // Live drawing state (not committed to store yet)
   const [liveShape, setLiveShape] = useState<{
-    type: "line" | "arrow";
+    type: "line" | "arrow" | "throwable";
     points: number[];
   } | null>(null);
   const isDrawingRef = useRef(false);
 
   // Refs
-  const stageRef     = useRef<Konva.Stage>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const phaseRef     = useRef<HTMLDivElement>(null);
+  const stageRef        = useRef<Konva.Stage>(null);
+  const containerRef    = useRef<HTMLDivElement>(null);
+  const resizeTimerRef  = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const phaseRef        = useRef<HTMLDivElement>(null);
 
   // Derived
   const floor      = currentFloor();
   const map        = currentMap();
-  const mapItems   = maps.map((m) => ({ id: m.id, label: m.name }));
+  const mapItems   = maps.map((m) => {
+    const key = `map_${m.id}`;
+    const translated = t(key, language);
+    return { id: m.id, label: translated === key ? m.name : translated };
+  });
   const floorItems = map
     ? map.floors
         .filter((f) => f.images.default || f.images.blueprint || f.images.isometric)
         .map((f) => ({ id: f.id, label: f.label }))
     : [];
 
-  // Path construction — floor.images is the single source of truth for all maps
-  const basePath   = floor?.images?.[currentView] ?? floor?.images?.default ?? "";
-  const vertPath   = overlays.vert   ? (floor?.images?.verticality ?? "") : "";
-  const propsPath  = overlays.props  ? (floor?.images?.props       ?? "") : "";
-  const stairsPath = overlays.stairs ? (floor?.images?.stairs      ?? "") : "";
-  const namesPath  = overlays.names  ? (floor?.images?.roomNames   ?? "") : "";
+  // basePath for the current floor is used only for image-load-status tracking and fit-to-screen
+  const basePath = floor?.images?.[currentView] ?? floor?.images?.default ?? "";
 
-  const [, imageStatus] = useImage(basePath);
+  const [baseImgEl, imageStatus] = useImage(basePath);
 
   // ── Container resize ───────────────────────────────────────────────────────
+  // Debounced by one ~16ms frame so Konva doesn't redraw on every pixel of a sidebar drag.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const obs = new ResizeObserver(([entry]) =>
-      setContainerSize({ width: entry.contentRect.width, height: entry.contentRect.height })
-    );
+    const obs = new ResizeObserver(([entry]) => {
+      clearTimeout(resizeTimerRef.current);
+      resizeTimerRef.current = setTimeout(() => {
+        setContainerSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+      }, 16);
+    });
     obs.observe(el);
-    return () => obs.disconnect();
+    return () => {
+      obs.disconnect();
+      clearTimeout(resizeTimerRef.current);
+    };
   }, []);
 
   // ── Fit-to-screen ──────────────────────────────────────────────────────────
+  // Blueprint view: the Konva canvas coordinate space is 6400×3600 (background rect size).
+  // All other views: fit to the natural image dimensions.
   const fitToScreen = useCallback(() => {
-    const imgEl = new Image();
-    imgEl.src = basePath;
-    const doFit = (w: number, h: number) => {
-      if (!w || !h || !containerSize.width || !containerSize.height) return;
-      const padding  = 48;
-      const newScale = Math.min(
-        (containerSize.width  - padding * 2) / w,
-        (containerSize.height - padding * 2) / h,
-      );
-      setScale(newScale);
-      setPosition({
-        x: (containerSize.width  - w * newScale) / 2,
-        y: (containerSize.height - h * newScale) / 2,
-      });
+    const isBp = currentView === "blueprint";
+    const w    = isBp ? 6400 : baseImgEl?.naturalWidth;
+    const h    = isBp ? 3600 : baseImgEl?.naturalHeight;
+    if (!w || !h || !containerSize.width || !containerSize.height) return;
+    const scale = Math.min(containerSize.width / w, containerSize.height / h) * 0.95;
+    const pos   = {
+      x: (containerSize.width  - w * scale) / 2,
+      y: (containerSize.height - h * scale) / 2,
     };
-    if (imgEl.complete && imgEl.naturalWidth) doFit(imgEl.naturalWidth, imgEl.naturalHeight);
-    else imgEl.onload = () => doFit(imgEl.naturalWidth, imgEl.naturalHeight);
-  }, [basePath, containerSize]);
+    scaleRef.current    = scale;
+    positionRef.current = pos;
+    const stage = stageRef.current;
+    if (stage) { stage.scale({ x: scale, y: scale }); stage.position(pos); stage.batchDraw(); }
+    setZoomPercent(Math.round(scale * 100));
+  }, [baseImgEl, containerSize, currentView]);
 
+  // Auto-fit whenever the image finishes loading, the container resizes,
+  // or the map/floor/view changes — but NOT in blueprint mode (Stage must stay untouched there).
   useEffect(() => {
-    if (imageStatus === "loaded") fitToScreen();
+    if (imageStatus === "loaded" && currentView !== "blueprint") fitToScreen();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageStatus, containerSize.width, containerSize.height]);
-
-  useEffect(() => {
-    setScale(1);
-    setPosition({ x: 0, y: 0 });
-  }, [basePath]);
+  }, [imageStatus, containerSize.width, containerSize.height, currentMapId, currentFloorId, currentView]);
 
   // Auto-fallback: if the selected view has no image on the new floor, switch to first available
   useEffect(() => {
@@ -667,22 +913,28 @@ export default function MainCanvas() {
   useEffect(() => {
     isDrawingRef.current = false;
     setLiveShape(null);
-    // Deselect when leaving cursor mode
-    if (tool !== "cursor") setSelectedId(null);
+    // Keep selection alive for route tool so waypoints attach to the selected op
+    if (tool !== "cursor" && tool !== "route") setSelectedId(null);
   }, [tool]);
 
-  // ── Keyboard: Delete / Backspace removes selected item ────────────────────
+  // ── Keyboard: Delete / Backspace removes selected item or text node ───────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Delete" && e.key !== "Backspace") return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (selectedId) { removeItem(selectedId); setSelectedId(null); }
+      if (!selectedId) return;
+      if (texts.some((t) => t.id === selectedId)) {
+        removeText(selectedId);
+      } else {
+        removeItem(selectedId);
+      }
+      setSelectedId(null);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [selectedId, removeItem]);
+  }, [selectedId, removeItem, removeText, texts]);
 
-  // ── Keyboard shortcuts for tool switching ─────────────────────────────────
+  // ── Keyboard shortcuts for tool switching + route step 1–5 ───────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -691,6 +943,14 @@ export default function MainCanvas() {
       if (e.key === "p" || e.key === "P") setTool("pen");
       if (e.key === "a" || e.key === "A") setTool("arrow");
       if (e.key === "e" || e.key === "E") setTool("eraser");
+      if (e.key === "t" || e.key === "T") setTool("throwable");
+      if (e.key === "r" || e.key === "R") setTool("route");
+      if (e.key === "x" || e.key === "X") setTool("text");
+      if (e.key === " ") { e.preventDefault(); setIsPlaying(!isPlaying); }
+      // 1–5 jump to route step when route tool is active
+      if (tool === "route" && e.key >= "1" && e.key <= "5") {
+        setCurrentRouteStep(parseInt(e.key) as 1 | 2 | 3 | 4 | 5);
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === "z") { e.preventDefault(); undo(); }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
@@ -698,12 +958,27 @@ export default function MainCanvas() {
         setIsSaving(true);
         saveCurrentProject().finally(() => setIsSaving(false));
       }
+      // Arrow-key canvas pan — 40px per keypress, no React state involved
+      const PAN_STEP = 40;
+      if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const stage = stageRef.current;
+        if (!stage) return;
+        const dx = e.key === "ArrowLeft" ? PAN_STEP : e.key === "ArrowRight" ? -PAN_STEP : 0;
+        const dy = e.key === "ArrowUp"   ? PAN_STEP : e.key === "ArrowDown"  ? -PAN_STEP : 0;
+        const newPos = { x: positionRef.current.x + dx, y: positionRef.current.y + dy };
+        positionRef.current = newPos;
+        stage.position(newPos);
+        stage.batchDraw();
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [setTool, undo, currentProjectId, saveCurrentProject]);
+  }, [setTool, tool, setCurrentRouteStep, undo, currentProjectId, saveCurrentProject, isPlaying, setIsPlaying]);
 
   // ── Wheel zoom ─────────────────────────────────────────────────────────────
+  // Wheel zoom: bypass React state entirely — write directly to Konva stage.
+  // Only zoomPercent (toolbar display) is updated via throttled setState, max once per 100ms.
   const handleWheel = useCallback(
     (e: Konva.KonvaEventObject<WheelEvent>) => {
       e.evt.preventDefault();
@@ -711,25 +986,49 @@ export default function MainCanvas() {
       if (!stage) return;
       const ptr = stage.getPointerPosition();
       if (!ptr) return;
+      const cur      = scaleRef.current;
       const dir      = e.evt.deltaY < 0 ? 1 : -1;
-      const newScale = Math.min(Math.max(scale * (dir > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR), ZOOM_MIN), ZOOM_MAX);
-      setPosition({
-        x: ptr.x - (ptr.x - position.x) * (newScale / scale),
-        y: ptr.y - (ptr.y - position.y) * (newScale / scale),
-      });
-      setScale(newScale);
+      const newScale = Math.min(Math.max(cur * (dir > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR), ZOOM_MIN), ZOOM_MAX);
+      const newPos   = {
+        x: ptr.x - (ptr.x - positionRef.current.x) * (newScale / cur),
+        y: ptr.y - (ptr.y - positionRef.current.y) * (newScale / cur),
+      };
+      scaleRef.current    = newScale;
+      positionRef.current = newPos;
+      stage.scale({ x: newScale, y: newScale });
+      stage.position(newPos);
+      stage.batchDraw();
+      // Throttle the React state update to ≤1 re-render per 100 ms so the Konva
+      // imperative path runs at full frame-rate while the toolbar % lags minimally.
+      if (zoomUiTimerRef.current === undefined) {
+        zoomUiTimerRef.current = setTimeout(() => {
+          setZoomPercent(Math.round(scaleRef.current * 100));
+          zoomUiTimerRef.current = undefined;
+        }, 100);
+      }
     },
-    [scale, position],
+    [], // refs are always current — no deps needed
   );
 
+  // Clear pending zoom-UI timer on unmount to avoid setState-after-unmount.
+  useEffect(() => () => clearTimeout(zoomUiTimerRef.current), []);
+
   const zoomStep = (dir: 1 | -1) => {
-    const cx = containerSize.width / 2, cy = containerSize.height / 2;
-    const newScale = Math.min(Math.max(scale * (dir > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR), ZOOM_MIN), ZOOM_MAX);
-    setPosition({
-      x: cx - (cx - position.x) * (newScale / scale),
-      y: cy - (cy - position.y) * (newScale / scale),
-    });
-    setScale(newScale);
+    const stage = stageRef.current;
+    if (!stage) return;
+    const cx  = containerSize.width / 2, cy = containerSize.height / 2;
+    const cur = scaleRef.current;
+    const newScale = Math.min(Math.max(cur * (dir > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR), ZOOM_MIN), ZOOM_MAX);
+    const newPos   = {
+      x: cx - (cx - positionRef.current.x) * (newScale / cur),
+      y: cy - (cy - positionRef.current.y) * (newScale / cur),
+    };
+    scaleRef.current    = newScale;
+    positionRef.current = newPos;
+    stage.scale({ x: newScale, y: newScale });
+    stage.position(newPos);
+    stage.batchDraw();
+    setZoomPercent(Math.round(newScale * 100));
   };
 
   // ── HTML5 drag-drop: receive operator token from sidebar ───────────────────
@@ -741,10 +1040,12 @@ export default function MainCanvas() {
     const container = containerRef.current;
     if (!stage || !container) return;
 
-    const rect    = container.getBoundingClientRect();
-    const canvasX = (e.clientX - rect.left  - stage.x()) / stage.scaleX();
-    const canvasY = (e.clientY - rect.top   - stage.y()) / stage.scaleY();
-    console.log("🎯 Calculated Canvas X/Y:", canvasX, canvasY);
+    const rect      = container.getBoundingClientRect();
+    const worldX    = (e.clientX - rect.left  - stage.x()) / stage.scaleX();
+    const worldY    = (e.clientY - rect.top   - stage.y()) / stage.scaleY();
+    // Convert Stage-world → map-image coords (accounts for blueprint transform)
+    const canvasX   = isStandardBp ? (worldX - 3200) / bpScale + bpOffsetX : worldX;
+    const canvasY   = isStandardBp ? (worldY - 1800) / bpScale + bpOffsetY : worldY;
 
     const data = dragState.operator;
     dragState.operator = null;
@@ -756,6 +1057,7 @@ export default function MainCanvas() {
       operatorId: data.operatorId,
       iconPath:   data.iconPath,
       name:       data.name,
+      side:       data.side,
       x: canvasX, y: canvasY,
       rotation: 0, scaleX: 1, scaleY: 1,
     });
@@ -834,7 +1136,37 @@ export default function MainCanvas() {
     }
   };
 
-  // Close export menu and phase popover on outside click
+  // ── Export requests from FloatingExportWindow ──────────────────────────────
+  useEffect(() => {
+    if (gifExportRequested) handleExportGif();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gifExportRequested]);
+
+  useEffect(() => {
+    if (imageExportRequested) { handleExportImage(); setImageExportRequested(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageExportRequested]);
+
+  useEffect(() => {
+    if (allPhasesExportRequested) { handleExportAllPhases(); setAllPhasesExportRequested(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allPhasesExportRequested]);
+
+  // ── Presentation playback — step through route 1→5, then loop back ────────
+  const playStepRef = useRef(currentRouteStep);
+  playStepRef.current = currentRouteStep;
+  useEffect(() => {
+    if (!isPlaying) return;
+    const id = setInterval(() => {
+      const next = playStepRef.current < 5
+        ? ((playStepRef.current + 1) as 1 | 2 | 3 | 4 | 5)
+        : 1;
+      setCurrentRouteStep(next);
+    }, 1200);
+    return () => clearInterval(id);
+  }, [isPlaying, setCurrentRouteStep]);
+
+  // Close export menu, phase popover, and context menu on outside click
   useEffect(() => {
     const close = (e: MouseEvent) => {
       if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
@@ -843,6 +1175,7 @@ export default function MainCanvas() {
       if (phaseRef.current && !phaseRef.current.contains(e.target as Node)) {
         setPhaseOpen(false);
       }
+      setCtxMenu(null);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
@@ -869,6 +1202,46 @@ export default function MainCanvas() {
     URL.revokeObjectURL(url);
   };
 
+  const handleExportJson = () => {
+    const board  = useBoardStore.getState();
+    const canvas = useCanvasStore.getState();
+    const data = {
+      mapId:         canvas.currentMapId,
+      floorId:       canvas.currentFloorId,
+      items:         board.items,
+      lines:         board.lines,
+      throwableLines: board.throwableLines,
+      texts:         board.texts,
+      notes:         board.notes,
+      exportedAt:    Date.now(),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = "R6_Tactics_Project.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset input so same file can be imported again if needed
+    e.target.value = "";
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string);
+        useBoardStore.getState().loadProjectData(data);
+      } catch {
+        console.error("❌ [Import] Failed to parse JSON project file");
+        alert("Import failed: invalid or corrupted JSON file.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
   // Loop through phases 1-4, capture each, download as individual PNGs
   const handleExportAllPhases = async () => {
     const stage = stageRef.current;
@@ -878,7 +1251,7 @@ export default function MainCanvas() {
     try {
       for (const ph of [1, 2, 3, 4]) {
         setPhase(ph);
-        await new Promise<void>((r) => setTimeout(r, 150));
+        await new Promise<void>((r) => setTimeout(r, 300));
         const dataURL = stage.toDataURL({ pixelRatio: 2 });
         const a = document.createElement("a");
         a.href = dataURL;
@@ -895,57 +1268,142 @@ export default function MainCanvas() {
     }
   };
 
-  // Capture all 4 phases and stitch into an animated GIF via gifshot
+  // Smart GIF pipeline: detects active floors per phase, renders per-floor frames
+  // filtered by exportVisibility, downloads per-phase-per-floor GIFs + merged GIFs.
   const handleExportGif = async () => {
     const stage = stageRef.current;
     if (!stage || isExportingGif || isExporting) return;
+
+    const phases = [...exportPhases].sort((a, b) => a - b);
+    if (phases.length === 0) return;
+
     setIsExportingGif(true);
     const savedPhase = currentPhase;
-    const frames: string[] = [];
+    const savedStep  = currentRouteStep;
+    const savedFloor = currentFloorId;
+    // 3 hold-frames per step × 5 steps = 15 frames per phase; operator snaps, no lerp
+    const FRAMES_PER_STEP = 3;
+
+    const mapBase   = (map?.name ?? "Tactic").replace(/\s+/g, "");
+    const visSuffix = exportVisibility === "all" ? "" : `_${exportVisibility.toUpperCase()}`;
+
+    // Collect floors active in a given phase (items + lines + throwables)
+    const getActiveFloors = (ph: number): string[] => {
+      const floorSet = new Set<string>();
+      items.filter((i) => i.phase === ph && i.floorId).forEach((i) => floorSet.add(i.floorId!));
+      lines.filter((l) => l.phase === ph && l.floorId).forEach((l) => floorSet.add(l.floorId!));
+      throwableLines.filter((l) => l.phase === ph && l.floorId).forEach((l) => floorSet.add(l.floorId!));
+      // Fallback to current floor when phase has no placed content
+      if (floorSet.size === 0 && savedFloor) floorSet.add(savedFloor);
+      return [...floorSet];
+    };
+
+    // frames keyed as `${phase}-${floorId}` → string[]
+    const phaseFloorFrames = new Map<string, string[]>();
+
     try {
-      for (const ph of [1, 2, 3, 4]) {
+      for (const ph of phases) {
         setPhase(ph);
         await new Promise<void>((r) => setTimeout(r, 150));
-        frames.push(stage.toDataURL({ pixelRatio: 1 }));
-      }
-      setPhase(savedPhase);
-      const { createGIF } = await import("gifshot");
-      createGIF(
-        {
-          images: frames,
-          gifWidth:   stage.width(),
-          gifHeight:  stage.height(),
-          interval:   1.5,
-          numWorkers: 2,
-        },
-        (obj) => {
-          if (!obj.error) {
-            const a = document.createElement("a");
-            a.href = obj.image;
-            a.download = "R6-Tactical-Animation.gif";
-            a.click();
+
+        for (const fid of getActiveFloors(ph)) {
+          setFloor(fid);
+          await new Promise<void>((r) => setTimeout(r, 150));
+
+          const frames: string[] = [];
+          for (let step = 1; step <= 5; step++) {
+            setCurrentRouteStep(step as 1 | 2 | 3 | 4 | 5);
+            for (let f = 0; f < FRAMES_PER_STEP; f++) {
+              await new Promise<void>((r) => setTimeout(r, 80));
+              frames.push(stage.toDataURL({ pixelRatio: 1 }));
+            }
           }
-          setIsExportingGif(false);
-        },
-      );
+          phaseFloorFrames.set(`${ph}-${fid}`, frames);
+        }
+      }
+
+      // Restore view state
+      setPhase(savedPhase);
+      setCurrentRouteStep(savedStep);
+      if (savedFloor) setFloor(savedFloor);
+
+      const { createGIF } = await import("gifshot");
+
+      const triggerGif = (frames: string[], filename: string) =>
+        new Promise<void>((resolve) => {
+          createGIF(
+            { images: frames, gifWidth: stage.width(), gifHeight: stage.height(), interval: 0.12, numWorkers: 2 },
+            (obj) => {
+              if (!obj.error) {
+                const a = document.createElement("a");
+                a.href = obj.image;
+                a.download = filename;
+                a.click();
+              }
+              resolve();
+            },
+          );
+        });
+
+      const floorLabel = (fid: string) =>
+        (map?.floors.find((f) => f.id === fid)?.label ?? fid).replace(/\s+/g, "");
+
+      // Individual phase GIFs — one per active floor
+      for (const ph of phases) {
+        const activeFloors = getActiveFloors(ph);
+        const multiFloor   = activeFloors.length > 1;
+        for (const fid of activeFloors) {
+          const frames = phaseFloorFrames.get(`${ph}-${fid}`) ?? [];
+          const suffix = multiFloor ? `_${floorLabel(fid)}` : "";
+          await triggerGif(frames, `${mapBase}${visSuffix}_Phase${ph}${suffix}.gif`);
+          await new Promise<void>((r) => setTimeout(r, 80));
+        }
+      }
+
+      // Merged GIF if multiple phases selected — one per floor
+      if (phases.length > 1) {
+        const allFloors  = new Set(phases.flatMap((ph) => getActiveFloors(ph)));
+        const multiFloor = allFloors.size > 1;
+        const range      = `${phases[0]}-${phases[phases.length - 1]}`;
+        for (const fid of allFloors) {
+          const allFrames = phases.flatMap((ph) => phaseFloorFrames.get(`${ph}-${fid}`) ?? []);
+          if (allFrames.length === 0) continue;
+          const suffix = multiFloor ? `_${floorLabel(fid)}` : "";
+          await triggerGif(allFrames, `${mapBase}${visSuffix}_Phase${range}${suffix}_Merged.gif`);
+        }
+      }
     } catch (err) {
       console.error("❌ [Export] GIF export failed:", err);
       setPhase(savedPhase);
+      setCurrentRouteStep(savedStep);
+      if (savedFloor) setFloor(savedFloor);
+    } finally {
       setIsExportingGif(false);
+      setGifExportRequested(false);
     }
   };
 
   // ── Stage mouse events (drawing) ───────────────────────────────────────────
+  // Convert Stage-world pointer position → map-image coordinate space.
+  // In blueprint "standard" mode the image group applies a transform; storing items
+  // at the inverse-transformed coordinates keeps them aligned with the building.
+  const toMapCoords = (stage: Konva.Stage): Vec2 => {
+    const w = toCanvasPos(stage);
+    if (!isStandardBp) return w;
+    return { x: (w.x - 3200) / bpScale + bpOffsetX, y: (w.y - 1800) / bpScale + bpOffsetY };
+  };
+
   const handleMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
     const stage = stageRef.current!;
 
     if (tool === "place_operator" && pendingOperator) {
-      const pos = toCanvasPos(stage);
+      const pos = toMapCoords(stage);
       addItem({
         id: crypto.randomUUID(),
         operatorId: pendingOperator.operatorId,
         iconPath:   pendingOperator.iconPath,
         name:       pendingOperator.name,
+        side:       pendingOperator.side,
         x: pos.x, y: pos.y,
         rotation: 0, scaleX: 1, scaleY: 1,
       });
@@ -954,27 +1412,56 @@ export default function MainCanvas() {
       return;
     }
 
-    if (tool === "cursor") {
-      if (e.target === stage) setSelectedId(null);
-      return;
-    }
-    if (tool === "eraser") {
-      if (e.target === stage) setSelectedId(null);
+    if (tool === "text") {
+      if (e.target === stage) {
+        const pos = toMapCoords(stage);
+        addText({
+          id: crypto.randomUUID(),
+          x: pos.x, y: pos.y,
+          text: "New Text",
+          fontSize: 120,
+          fill: brushColor,
+          rotation: 0, scaleX: 1, scaleY: 1,
+        });
+        setTool("cursor");
+      }
       return;
     }
 
-    // pen or arrow: start drawing
+    if (tool === "cursor") {
+      if (e.target === stage) { setSelectedId(null); setResizingItemId(null); setTransformingItemId(null); setCtxMenu(null); }
+      return;
+    }
+    if (tool === "eraser") {
+      if (e.target === stage) { setSelectedId(null); setResizingItemId(null); setTransformingItemId(null); }
+      return;
+    }
+
+    // route: add waypoint at currentRouteStep to currently-selected operator on background click
+    if (tool === "route") {
+      if (e.target === stage && selectedId) {
+        const pos = toMapCoords(stage);
+        addRoutePoint(selectedId, currentRouteStep, { x: pos.x, y: pos.y } as Waypoint);
+      }
+      return;
+    }
+
+    // pen, arrow, throwable: start freehand / line drawing
     e.evt.preventDefault();
     isDrawingRef.current = true;
-    const pos = toCanvasPos(stage);
-    setLiveShape({ type: tool === "arrow" ? "arrow" : "line", points: [pos.x, pos.y, pos.x, pos.y] });
+    const pos = toMapCoords(stage);
+    if (tool === "throwable") {
+      setLiveShape({ type: "throwable", points: [pos.x, pos.y, pos.x, pos.y] });
+    } else {
+      setLiveShape({ type: tool === "arrow" ? "arrow" : "line", points: [pos.x, pos.y, pos.x, pos.y] });
+    }
   };
 
   const handleMouseMove = (_e: Konva.KonvaEventObject<MouseEvent>) => {
     if (!isDrawingRef.current || !liveShape) return;
-    const pos = toCanvasPos(stageRef.current!);
+    const pos = toMapCoords(stageRef.current!);
 
-    if (liveShape.type === "pen" as unknown as string || liveShape.type === "line") {
+    if (liveShape.type === "line" || liveShape.type === "throwable") {
       // Freehand: append each point
       setLiveShape((prev) => prev ? { ...prev, points: [...prev.points, pos.x, pos.y] } : null);
     } else {
@@ -990,61 +1477,360 @@ export default function MainCanvas() {
     isDrawingRef.current = false;
 
     if (liveShape.points.length >= 4) {
-      addLine({
-        id:          crypto.randomUUID(),
-        type:        liveShape.type,
-        points:      liveShape.points,
-        color:       penColor,
-        strokeWidth: penSize,
-      });
+      if (liveShape.type === "throwable") {
+        addThrowableLine({ id: crypto.randomUUID(), points: liveShape.points });
+      } else {
+        addLine({
+          id:          crypto.randomUUID(),
+          type:        liveShape.type,
+          points:      liveShape.points,
+          color:       brushColor,
+          strokeWidth: brushSize,
+        });
+      }
     }
     setLiveShape(null);
   };
 
   // ── Derived display ────────────────────────────────────────────────────────
-  const zoomPercent = Math.round(scale * 100);
   const isPannable  = tool === "cursor" || tool === "eraser";
 
   const cursorStyle: React.CSSProperties["cursor"] =
     tool === "pen"            ? "crosshair" :
     tool === "arrow"          ? "crosshair" :
+    tool === "throwable"      ? "crosshair" :
+    tool === "route"          ? "cell"      :
     tool === "eraser"         ? "cell"      :
+    tool === "text"           ? "text"      :
     tool === "place_operator" ? "copy"      :
     "default";
 
   const statusHints: Record<Tool, string> = {
-    cursor:         t("hint.cursor", language),
-    pen:            t("hint.pen",    language),
-    arrow:          t("hint.arrow",  language),
-    eraser:         t("hint.eraser", language),
+    cursor:         t("hint.cursor",    language),
+    pen:            t("hint.pen",       language),
+    arrow:          t("hint.arrow",     language),
+    eraser:         t("hint.eraser",    language),
+    throwable:      "Throwable · drag to draw trajectory  (T)",
+    route:          "Route · click operator to select, then click canvas to add waypoints (max 5) · Eraser clears route  (R)",
+    text:           t("hint.text",      language),
     place_operator: `${t("hint.placing", language)} ${pendingOperator?.name ?? "operator"} · click on map to place · Esc to cancel`,
   };
 
-  const toolConfig: { id: Tool; icon: React.ElementType; label: string }[] = [
-    { id: "cursor", icon: MousePointer2, label: "Select  (V)" },
-    { id: "pen",    icon: Pencil,        label: "Pen     (P)" },
-    { id: "arrow",  icon: ArrowRight,    label: "Arrow   (A)" },
-    { id: "eraser", icon: Eraser,        label: "Eraser  (E)" },
+  const toolConfig: { id: Tool; icon: React.ElementType; label: string; dividerBefore?: boolean }[] = [
+    { id: "cursor",    icon: MousePointer2,  label: "Select     (V)" },
+    { id: "pen",       icon: Pencil,         label: "Pen        (P)" },
+    { id: "arrow",     icon: ArrowRight,     label: "Arrow      (A)" },
+    { id: "eraser",    icon: Eraser,         label: "Eraser     (E)" },
+    { id: "throwable", icon: Spline,         label: "Throwable  (T)", dividerBefore: true },
+    { id: "route",     icon: Route,          label: "Route      (R)" },
+    { id: "text",      icon: MessageSquare,  label: "Text       (X)" },
   ];
+
+  // ── Memoized Stage layers — excluded from zoomPercent re-renders ──────────
+  // When only zoomPercent changes (e.g. wheel scroll), these layers return
+  // the same object reference so React skips reconciling the entire Konva tree.
+  const stageLayers = useMemo(() => (
+    <>
+      {/* Layer 0 — active floor map background only. All floors are pre-cached by
+          the HTML <MapPreloader> so use-image resolves from RAM in 0ms on floor
+          switch, preventing the white-flash without bloating the Konva hit-graph. */}
+      <Layer listening={false}>
+        {floor && (() => {
+          const flBase   = floor.images[currentView] ?? floor.images.default ?? "";
+          const flVert   = overlays.vert   ? (floor.images.verticality ?? "") : "";
+          const flProps  = overlays.props  ? (floor.images.props        ?? "") : "";
+          const flStairs = overlays.stairs ? (floor.images.stairs       ?? "") : "";
+          const flNames  = overlays.names  ? (floor.images.roomNames    ?? "") : "";
+          return flBase ? (
+            <>
+              <MapImageLayer
+                basePath={flBase}
+                vertPath={flVert}
+                propsPath={flProps}
+                stairsPath={flStairs}
+                namesPath={flNames}
+                currentView={currentView}
+                currentMapId={currentMapId ?? ""}
+                blueprintScaleMode={blueprintScaleMode}
+                onCenterCalculated={setBuildingCenter}
+              />
+              {/* Blueprint legend */}
+              {currentView === "blueprint" && (
+                <KonvaLabel x={160} y={160} listening={false}>
+                  <KonvaTag
+                    fill="rgba(10, 37, 64, 0.85)"
+                    cornerRadius={12}
+                    stroke="#4aa5ff"
+                    strokeWidth={6}
+                  />
+                  <KonvaText
+                    text={"■  " + (map?.name.toUpperCase() || "MAP") + " // " + (floor.label.toUpperCase() || "FLOOR") + " — TACTICAL BLUEPRINT"}
+                    fill="#ffffff"
+                    fontFamily="ui-monospace, monospace"
+                    fontSize={72}
+                    fontStyle="bold"
+                    padding={40}
+                  />
+                </KonvaLabel>
+              )}
+            </>
+          ) : null;
+        })()}
+      </Layer>
+
+      {/* Layer 1 — operator tokens + drawings, co-transformed with the map image */}
+      <Layer>
+        <KonvaGroup {...bpTransformProps}>
+        {/* Committed lines — filtered to current phase and floor */}
+        {lines.filter((l) => l.phase === currentPhase && l.floorId === currentFloorId).map((ln) =>
+          ln.type === "arrow" ? (
+            <Arrow key={ln.id}
+              points={ln.points}
+              stroke={ln.color}
+              fill={ln.color}
+              strokeWidth={ln.strokeWidth}
+              pointerLength={12}
+              pointerWidth={10}
+              lineCap="round"
+              hitStrokeWidth={16}
+              listening={tool === "eraser"}
+              onClick={() => { if (tool === "eraser") removeLine(ln.id); }}
+            />
+          ) : (
+            <Line key={ln.id}
+              points={ln.points}
+              stroke={ln.color}
+              strokeWidth={ln.strokeWidth}
+              lineCap="round"
+              lineJoin="round"
+              tension={0.4}
+              hitStrokeWidth={16}
+              listening={tool === "eraser"}
+              onClick={() => { if (tool === "eraser") removeLine(ln.id); }}
+            />
+          )
+        )}
+
+        {/* Throwable trajectories — dashed parabolas (color/width stored per-line) */}
+        {throwableLines.filter((l) => l.phase === currentPhase && l.floorId === currentFloorId).map((tl) => (
+          <Line key={tl.id}
+            points={tl.points}
+            stroke={tl.color}
+            strokeWidth={tl.strokeWidth}
+            dash={[10, 8]}
+            tension={0.4}
+            lineCap="round"
+            lineJoin="round"
+            hitStrokeWidth={16}
+            listening={tool === "eraser"}
+            onClick={() => { if (tool === "eraser") removeThrowableLine(tl.id); }}
+          />
+        ))}
+
+        {/* Live preview while drawing */}
+        {liveShape && liveShape.type === "arrow" && (
+          <Arrow
+            points={liveShape.points}
+            stroke={brushColor}
+            fill={brushColor}
+            strokeWidth={brushSize}
+            pointerLength={12}
+            pointerWidth={10}
+            lineCap="round"
+            listening={false}
+            opacity={0.75}
+          />
+        )}
+        {liveShape && liveShape.type === "line" && (
+          <Line
+            points={liveShape.points}
+            stroke={brushColor}
+            strokeWidth={brushSize}
+            lineCap="round"
+            lineJoin="round"
+            tension={0.4}
+            listening={false}
+            opacity={0.75}
+          />
+        )}
+        {liveShape && liveShape.type === "throwable" && (
+          <Line
+            points={liveShape.points}
+            stroke={throwableColor}
+            strokeWidth={throwableSize}
+            dash={[10, 8]}
+            tension={0.4}
+            lineCap="round"
+            lineJoin="round"
+            listening={false}
+            opacity={0.75}
+          />
+        )}
+
+        {/* Placed operator tokens — rendered at effective route position for currentRouteStep */}
+        {items
+          .filter((i) => i.phase === currentPhase && i.floorId === currentFloorId)
+          .filter((i) => !isExportingGif || exportVisibility === "all" || i.side === "neutral" || i.side === exportVisibility)
+          .map((item) => {
+          const eff = getEffectiveRoute(item);
+          return (
+            <OperatorToken
+              key={item.id}
+              item={item}
+              isSelected={item.id === selectedId}
+              isTransforming={item.id === transformingItemId}
+              tool={tool}
+              status={eff[currentRouteStep].status}
+              onSelect={handleSelectOperator}
+              onUpdate={updateItem}
+              onRemove={(id) => { removeItem(id); handleSelectOperator(null); setTransformingItemId(null); }}
+              onDblClick={(id) => { setResizingItemId(id); setTransformingItemId(id); }}
+              onContextMenu={handleContextMenu}
+              displayX={eff[currentRouteStep].x}
+              displayY={eff[currentRouteStep].y}
+            />
+          );
+        })}
+
+        {/* Operator movement routes — hidden during GIF export; badges hide at current step */}
+        {!isExportingGif && items
+          .filter((i) => i.phase === currentPhase && i.floorId === currentFloorId && Object.keys(i.route).length > 0)
+          .map((item) => {
+          const eff          = getEffectiveRoute(item);
+          const upTo         = showFullRoute ? 5 : currentRouteStep;
+          const routePoints  = eff.slice(0, upTo + 1).flatMap((p) => [p.x, p.y]);
+          const isEraserActive = tool === "eraser";
+          return (
+            <Fragment key={`route-${item.id}`}>
+              <Arrow
+                points={routePoints}
+                stroke="rgba(255,255,255,0.92)"
+                fill="rgba(255,255,255,0.92)"
+                strokeWidth={2.5}
+                pointerLength={10}
+                pointerWidth={8}
+                lineCap="round"
+                lineJoin="round"
+                tension={0}
+                hitStrokeWidth={14}
+                listening={isEraserActive}
+                onClick={() => { if (isEraserActive) clearRoute(item.id); }}
+              />
+              {Object.entries(item.route)
+                .filter(([stepStr]) => Number(stepStr) <= upTo && Number(stepStr) !== currentRouteStep)
+                .map(([stepStr, wp]) => {
+                  const step = Number(stepStr);
+                  return (
+                    <Fragment key={step}>
+                      <KonvaCircle
+                        x={wp.x} y={wp.y}
+                        radius={11}
+                        fill="rgba(0,0,0,0.78)"
+                        stroke="rgba(255,255,255,0.92)"
+                        strokeWidth={1.5}
+                        hitStrokeWidth={14}
+                        listening={isEraserActive}
+                        onClick={() => { if (isEraserActive) clearRoute(item.id); }}
+                      />
+                      <KonvaText
+                        x={wp.x} y={wp.y}
+                        text={String(step)}
+                        fill="white"
+                        fontSize={12}
+                        fontStyle="bold"
+                        width={22}
+                        height={22}
+                        offsetX={11}
+                        offsetY={11}
+                        align="center"
+                        verticalAlign="middle"
+                        listening={false}
+                      />
+                    </Fragment>
+                  );
+                })}
+            </Fragment>
+          );
+        })}
+
+        {/* Text annotations */}
+        {texts
+          .filter((tn) => tn.phase === currentPhase && tn.floorId === currentFloorId)
+          .map((tn) => (
+            <KonvaText
+              key={tn.id}
+              id={`text-${tn.id}`}
+              x={tn.x}
+              y={tn.y}
+              text={editingTextId === tn.id ? "" : tn.text}
+              fontSize={tn.fontSize}
+              fill={tn.fill}
+              rotation={tn.rotation}
+              scaleX={tn.scaleX}
+              scaleY={tn.scaleY}
+              draggable={tool === "cursor"}
+              listening={tool === "cursor" || tool === "eraser" || tool === "text"}
+              shadowEnabled={selectedId === tn.id}
+              shadowColor="#e85d2a"
+              shadowBlur={10}
+              shadowOpacity={0.8}
+              onClick={(e) => {
+                e.cancelBubble = true;
+                if (tool === "eraser") { removeText(tn.id); return; }
+                if (tool === "cursor") setSelectedId(tn.id);
+              }}
+              onDblClick={(e) => {
+                e.cancelBubble = true;
+                if (tool === "cursor") setEditingTextId(tn.id);
+              }}
+              onDragEnd={(e) => updateText(tn.id, { x: e.target.x(), y: e.target.y() })}
+            />
+          ))}
+        </KonvaGroup>
+      </Layer>
+    </>
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [map, floor, currentFloorId, overlays, currentView, currentMapId, blueprintScaleMode,
+      bpTransformProps, setBuildingCenter,
+      lines, throwableLines, currentPhase, tool,
+      brushColor, brushSize, throwableColor, throwableSize, liveShape,
+      showFullRoute, currentRouteStep, isExportingGif, exportVisibility,
+      items, selectedId, transformingItemId,
+      handleSelectOperator, setResizingItemId, setTransformingItemId,
+      updateItem, removeLine, removeThrowableLine, removeItem, clearRoute,
+      texts, editingTextId, updateText, removeText, handleContextMenu]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="relative flex flex-1 flex-col overflow-hidden" style={{ background: "var(--color-r6-bg)" }}>
+    <div className="relative flex flex-1 flex-col" style={{ background: "var(--color-r6-bg)" }}>
 
       {/* ── Toolbar ─────────────────────────────────────────────────────────── */}
       <div
-        className="flex shrink-0 items-center gap-1 px-3 py-1.5 z-10"
+        className="relative flex shrink-0 items-center gap-1 px-3 py-1.5 z-20"
         style={{ background: "var(--color-r6-surface-glass)", borderBottom: "1px solid var(--color-r6-border)", backdropFilter: "blur(10px)" }}
       >
+        {/* Panel toggle + Reset workspace */}
+        <ToolBtn
+          icon={isLeftOpen ? PanelLeftClose : PanelLeftOpen}
+          label={isLeftOpen ? "Hide left panel" : "Show left panel"}
+          onClick={onToggleLeft}
+        />
+        <ToolBtn
+          icon={LayoutTemplate}
+          label="Reset panel layout"
+          onClick={onResetWorkspace}
+        />
+        <Divider />
+
         {/* Map selector */}
-        <Dropdown value={currentMapId} placeholder="Select Map" items={mapItems}
-          onChange={(id) => setMap(id)} icon={MapPin} minWidth={158} />
+        <Dropdown value={currentMapId} placeholder={t("select_map", language)} items={mapItems}
+          onChange={(id) => { if (id !== currentMapId) { useBoardStore.getState().clearBoard(); setMap(id); } }} icon={MapPin} minWidth={158} />
 
         {/* Floor selector */}
         {map && floorItems.length > 1 && (
           <>
             <span className="text-[13px]" style={{ color: "var(--color-r6-muted-2)" }}>›</span>
-            <Dropdown value={currentFloorId} placeholder="Floor" items={floorItems}
+            <Dropdown value={currentFloorId} placeholder="…" items={floorItems}
               onChange={(id) => setFloor(id)} minWidth={68} />
           </>
         )}
@@ -1054,7 +1840,7 @@ export default function MainCanvas() {
           <div ref={phaseRef} className="relative shrink-0">
             <button
               onClick={() => setPhaseOpen((o) => !o)}
-              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[14px] font-medium"
+              className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[14px] font-medium"
               style={{
                 background: phaseOpen ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
                 color:      phaseOpen ? "var(--color-r6-accent)"     : "var(--color-r6-text)",
@@ -1114,13 +1900,15 @@ export default function MainCanvas() {
               icon={ImageIcon}
               minWidth={108}
             />
-            {/* Blueprint scale mode toggle — icon-only, only visible in blueprint view */}
+            {/* Blueprint scale mode toggle — only visible in blueprint view */}
             {currentView === "blueprint" && (
               <ToolBtn
                 icon={blueprintScaleMode === "standard" ? ImageIcon : Maximize2}
                 label={t(blueprintScaleMode === "standard" ? "scale_default" : "scale_standard", language)}
                 active={blueprintScaleMode === "standard"}
-                onClick={() => setBlueprintScaleMode(blueprintScaleMode === "standard" ? "default" : "standard")}
+                onClick={() => {
+                  setBlueprintScaleMode(blueprintScaleMode === "standard" ? "default" : "standard");
+                }}
               />
             )}
           </>
@@ -1136,25 +1924,17 @@ export default function MainCanvas() {
           </>
         )}
 
-        <Divider />
-
-        {/* Draw tools */}
-        {toolConfig.map(({ id, icon, label }) => (
-          <ToolBtn key={id} icon={icon} label={label} active={tool === id} onClick={() => setTool(id)} />
-        ))}
-
-        <Divider />
 
         {/* Undo (Ctrl/Cmd+Z) */}
         <ToolBtn icon={Undo2} label="Undo (Ctrl+Z)" onClick={undo} />
 
-        <div className="flex-1" />
+        <div className="flex-1 shrink-0" />
 
         {/* Zoom strip */}
-        <div className="flex items-center rounded-lg"
+        <div className="flex shrink-0 h-7 items-center rounded-lg overflow-hidden"
           style={{ background: "var(--color-r6-surface-2)", border: "1px solid var(--color-r6-border)" }}>
           <ToolBtn icon={ZoomOut}   label="Zoom out"      onClick={() => zoomStep(-1)} />
-          <button className="w-12 text-center text-[13px] font-mono"
+          <button className="h-7 w-12 flex items-center justify-center text-[13px] font-mono"
             style={{ color: "var(--color-r6-muted)" }}
             onClick={fitToScreen} title="Fit to screen">
             {zoomPercent}%
@@ -1165,39 +1945,39 @@ export default function MainCanvas() {
 
         <Divider />
 
-        {/* Video button */}
+        {/* Video button — icon-only */}
         <button
-          title="Open floating video player"
+          title={t("Video", language)}
           onClick={toggleVideo}
-          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium"
+          className="flex shrink-0 h-7 w-7 items-center justify-center rounded-lg"
           style={{
             background:  isVideoOpen ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-            color:       isVideoOpen ? "var(--color-r6-accent)"     : "var(--color-r6-muted)",
+            color:       isVideoOpen ? "var(--color-r6-accent)"     : "#a1a1aa",
             border:      isVideoOpen ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
           }}
           onMouseEnter={(e) => { if (!isVideoOpen) { e.currentTarget.style.background = "var(--color-r6-accent-dim)"; e.currentTarget.style.color = "var(--color-r6-accent)"; e.currentTarget.style.borderColor = "var(--color-r6-accent)"; } }}
-          onMouseLeave={(e) => { if (!isVideoOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
+          onMouseLeave={(e) => { if (!isVideoOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "#a1a1aa"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
         >
-          <Video size={14} /> {t("Video", language)}
+          <Video size={14} />
         </button>
 
-        {/* AI / Notes toggle */}
+        {/* AI / Notes toggle — icon-only */}
         <button
           title="Toggle AI &amp; Notes panel"
           onClick={toggleRightSidebar}
-          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium"
+          className="flex shrink-0 h-7 w-7 items-center justify-center rounded-lg"
           style={{
             background:  isRightSidebarOpen ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-            color:       isRightSidebarOpen ? "var(--color-r6-accent)"     : "var(--color-r6-muted)",
+            color:       isRightSidebarOpen ? "var(--color-r6-accent)"     : "#a1a1aa",
             border:      isRightSidebarOpen ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
           }}
           onMouseEnter={(e) => { if (!isRightSidebarOpen) { e.currentTarget.style.background = "var(--color-r6-accent-dim)"; e.currentTarget.style.color = "var(--color-r6-accent)"; e.currentTarget.style.borderColor = "var(--color-r6-accent)"; } }}
-          onMouseLeave={(e) => { if (!isRightSidebarOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
+          onMouseLeave={(e) => { if (!isRightSidebarOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "#a1a1aa"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
         >
-          <Bot size={14} /> {t("AI", language)}
+          <Bot size={14} />
         </button>
 
-        {/* Save project */}
+        {/* Save project — icon-only */}
         <button
           title={currentProjectId ? "Save project (Ctrl+S)" : "No project open"}
           onClick={() => {
@@ -1206,35 +1986,34 @@ export default function MainCanvas() {
             saveCurrentProject().finally(() => setIsSaving(false));
           }}
           disabled={!currentProjectId || isSaving}
-          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium"
+          className="flex shrink-0 h-7 w-7 items-center justify-center rounded-lg"
           style={{
             background: isSaving ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-            color: (!currentProjectId || isSaving) ? "var(--color-r6-muted-2)" : "var(--color-r6-muted)",
+            color: (!currentProjectId || isSaving) ? "var(--color-r6-muted-2)" : "#a1a1aa",
             border: isSaving ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
             opacity: !currentProjectId ? 0.4 : 1,
           }}
           onMouseEnter={(e) => { if (currentProjectId && !isSaving) { e.currentTarget.style.background = "var(--color-r6-accent-dim)"; e.currentTarget.style.color = "var(--color-r6-accent)"; e.currentTarget.style.borderColor = "var(--color-r6-accent)"; } }}
-          onMouseLeave={(e) => { if (currentProjectId && !isSaving) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
+          onMouseLeave={(e) => { if (currentProjectId && !isSaving) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "#a1a1aa"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
         >
           {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-          {t("Save", language)}
         </button>
 
         {/* Export dropdown */}
-        <div ref={exportMenuRef} className="relative">
+        <div ref={exportMenuRef} className="relative shrink-0">
           <button
             title="Export tactical brief"
             onClick={() => setIsExportOpen((o) => !o)}
             disabled={isExporting || isExportingGif}
-            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium"
+            className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium whitespace-nowrap overflow-hidden"
             style={{
               background: isExportOpen ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-              color: (isExporting || isExportingGif) ? "var(--color-r6-muted-2)" : isExportOpen ? "var(--color-r6-accent)" : "var(--color-r6-muted)",
+              color: (isExporting || isExportingGif) ? "var(--color-r6-muted-2)" : isExportOpen ? "var(--color-r6-accent)" : "#a1a1aa",
               border: isExportOpen ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
               opacity: (isExporting || isExportingGif) ? 0.6 : 1,
             }}
             onMouseEnter={(e) => { if (!isExporting && !isExportingGif && !isExportOpen) { e.currentTarget.style.background = "var(--color-r6-accent-dim)"; e.currentTarget.style.color = "var(--color-r6-accent)"; e.currentTarget.style.borderColor = "var(--color-r6-accent)"; } }}
-            onMouseLeave={(e) => { if (!isExporting && !isExportingGif && !isExportOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
+            onMouseLeave={(e) => { if (!isExporting && !isExportingGif && !isExportOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "#a1a1aa"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
           >
             {(isExporting || isExportingGif) ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
             {t("Export", language)}
@@ -1255,8 +2034,10 @@ export default function MainCanvas() {
                 { key: "Export PDF",       Icon: FileDown,  action: () => { setIsExportOpen(false); handleExport(); } },
                 { key: "export_current",   Icon: FileImage, action: () => { setIsExportOpen(false); handleExportImage(); } },
                 { key: "export_all",       Icon: FileImage, action: () => { setIsExportOpen(false); handleExportAllPhases(); } },
-                { key: "export_gif",       Icon: Film,      action: () => { setIsExportOpen(false); handleExportGif(); } },
                 { key: "Export Markdown",  Icon: FileText,  action: () => { setIsExportOpen(false); handleExportMarkdown(); } },
+                { key: "GIF Export Settings", Icon: Film,   action: () => { setIsExportOpen(false); setExportWindowOpen(true); } },
+                { key: "save_project",     Icon: FileJson,  action: () => { setIsExportOpen(false); handleExportJson(); } },
+                { key: "load_project",     Icon: Upload,    action: () => { setIsExportOpen(false); jsonImportRef.current?.click(); } },
               ].map(({ key, Icon, action }) => (
                 <button
                   key={key}
@@ -1274,6 +2055,15 @@ export default function MainCanvas() {
           )}
         </div>
       </div>
+
+      {/* Hidden JSON import input */}
+      <input
+        ref={jsonImportRef}
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={handleImportJson}
+      />
 
       {/* ── Canvas area ───────────────────────────────────────────────────────── */}
       <div
@@ -1333,137 +2123,102 @@ export default function MainCanvas() {
 
         {/* ── Konva Stage ───────────────────────────────────────────────────── */}
         {containerSize.width > 0 && containerSize.height > 0 && (
-          <Stage
-            ref={stageRef}
-            width={containerSize.width}
-            height={containerSize.height}
-            scaleX={scale}
-            scaleY={scale}
-            x={position.x}
-            y={position.y}
-            draggable={isPannable}
-            onDragEnd={() => {
-              const s = stageRef.current;
-              if (s) setPosition({ x: s.x(), y: s.y() });
+          <div
+            style={{
+              width: "100%", height: "100%",
+              opacity:   imageStatus === "loaded" ? 1 : 0.6,
+              transform: imageStatus === "loaded" ? "scale(1)" : "scale(0.99)",
+              transition: "opacity 0.2s ease-out, transform 0.2s ease-out",
             }}
-            onWheel={handleWheel}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}   // cancel drawing if cursor leaves stage
           >
-            {/* Layer 0 — map background (base + optional overlays) */}
-            <Layer listening={false}>
-              {basePath && (
-                <MapImageLayer
-                  basePath={basePath}
-                  vertPath={vertPath}
-                  propsPath={propsPath}
-                  stairsPath={stairsPath}
-                  namesPath={namesPath}
-                  currentView={currentView}
-                  blueprintScaleMode={blueprintScaleMode}
-                />
-              )}
-              {/* Blueprint legend — painted onto the paper at absolute canvas coords */}
-              {currentView === "blueprint" && (
-                <KonvaLabel x={160} y={160} listening={false}>
-                  <KonvaTag
-                    fill="rgba(10, 37, 64, 0.85)"
-                    cornerRadius={12}
-                    stroke="#4aa5ff"
-                    strokeWidth={6}
-                  />
-                  <KonvaText
-                    text={"■  " + (map?.name.toUpperCase() || "MAP") + " // " + (floor?.label.toUpperCase() || "FLOOR") + " — TACTICAL BLUEPRINT"}
-                    fill="#ffffff"
-                    fontFamily="ui-monospace, monospace"
-                    fontSize={72}
-                    fontStyle="bold"
-                    padding={40}
-                  />
-                </KonvaLabel>
-              )}
-            </Layer>
+            <Stage
+              ref={stageRef}
+              width={containerSize.width}
+              height={containerSize.height}
+              draggable={isPannable}
+              onDragEnd={() => {
+                const s = stageRef.current;
+                if (s) positionRef.current = s.position();
+              }}
+              onWheel={handleWheel}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}   // cancel drawing if cursor leaves stage
+            >
+              {stageLayers}
+            </Stage>
+          </div>
+        )}
 
-            {/* Layer 1 — operator tokens + drawings */}
-            <Layer>
-              {/* Committed lines — filtered to current phase */}
-              {lines.filter((l) => l.phase === currentPhase).map((ln) =>
-                ln.type === "arrow" ? (
-                  <Arrow key={ln.id}
-                    points={ln.points}
-                    stroke={ln.color}
-                    fill={ln.color}
-                    strokeWidth={ln.strokeWidth}
-                    pointerLength={12}
-                    pointerWidth={10}
-                    lineCap="round"
-                    hitStrokeWidth={16}
-                    listening={tool === "eraser"}
-                    onClick={() => { if (tool === "eraser") removeLine(ln.id); }}
-                  />
-                ) : (
-                  <Line key={ln.id}
-                    points={ln.points}
-                    stroke={ln.color}
-                    strokeWidth={ln.strokeWidth}
-                    lineCap="round"
-                    lineJoin="round"
-                    tension={0.4}
-                    hitStrokeWidth={16}
-                    listening={tool === "eraser"}
-                    onClick={() => { if (tool === "eraser") removeLine(ln.id); }}
-                  />
-                )
-              )}
+        {/* Inline text editor — HTML textarea positioned over the editing text node */}
+        {editingTextId && (() => {
+          const tn = texts.find((t) => t.id === editingTextId);
+          if (!tn || !stageRef.current) return null;
+          const stage  = stageRef.current;
+          const scale  = stage.scaleX();
+          const sPos   = stage.position();
+          const screenX = tn.x * scale + sPos.x;
+          const screenY = tn.y * scale + sPos.y;
+          const fSize   = tn.fontSize * scale;
+          return (
+            <textarea
+              autoFocus
+              defaultValue={tn.text}
+              style={{
+                position: "absolute", left: screenX, top: screenY,
+                fontSize: fSize, fontFamily: "sans-serif",
+                color: tn.fill, background: "rgba(14,14,16,0.9)",
+                border: "1px solid var(--color-r6-accent)", borderRadius: 4,
+                padding: "2px 6px", resize: "both",
+                minWidth: 80, minHeight: fSize + 10,
+                zIndex: 100, outline: "none", lineHeight: 1.3,
+              }}
+              onBlur={(e) => { updateText(editingTextId, { text: e.target.value }); setEditingTextId(null); }}
+              onKeyDown={(e) => { if (e.key === "Escape") { setEditingTextId(null); e.preventDefault(); } }}
+            />
+          );
+        })()}
 
-              {/* Live preview while drawing */}
-              {liveShape && liveShape.type === "arrow" && (
-                <Arrow
-                  points={liveShape.points}
-                  stroke={penColor}
-                  fill={penColor}
-                  strokeWidth={penSize}
-                  pointerLength={12}
-                  pointerWidth={10}
-                  lineCap="round"
-                  listening={false}
-                  opacity={0.75}
-                />
-              )}
-              {liveShape && liveShape.type === "line" && (
-                <Line
-                  points={liveShape.points}
-                  stroke={penColor}
-                  strokeWidth={penSize}
-                  lineCap="round"
-                  lineJoin="round"
-                  tension={0.4}
-                  listening={false}
-                  opacity={0.75}
-                />
-              )}
-
-              {/* Placed operator tokens — filtered to current phase */}
-              {items.filter((i) => i.phase === currentPhase).map((item) => (
-                <OperatorToken
-                  key={item.id}
-                  item={item}
-                  isSelected={item.id === selectedId}
-                  tool={tool}
-                  onSelect={setSelectedId}
-                  onUpdate={updateItem}
-                  onRemove={(id) => { removeItem(id); setSelectedId(null); }}
-                />
-              ))}
-            </Layer>
-          </Stage>
+        {/* Right-click context menu for operator status */}
+        {ctxMenu && (
+          <div
+            style={{
+              position: "absolute", left: ctxMenu.x - (containerRef.current?.getBoundingClientRect().left ?? 0),
+              top: ctxMenu.y - (containerRef.current?.getBoundingClientRect().top ?? 0),
+              zIndex: 99999,
+              background: "var(--color-r6-surface)",
+              border: "1px solid var(--color-r6-border)",
+              borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,0.6)",
+              minWidth: 178, padding: "4px 0",
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {(["normal", "dead", "planting"] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => { setRouteStepStatus(ctxMenu.itemId, currentRouteStep, s); setCtxMenu(null); }}
+                className="flex w-full items-center gap-2.5 px-3 py-1.5 text-[13px]"
+                style={{ color: s === "dead" ? "#ef4444" : s === "planting" ? "#facc15" : "var(--color-r6-text)" }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                {s === "normal"   && <span style={{ fontSize: 15 }}>●</span>}
+                {s === "dead"     && <span style={{ fontSize: 15 }}>✕</span>}
+                {s === "planting" && <span style={{ fontSize: 15 }}>P</span>}
+                {t(`mark_${s}`, language)}
+                {/* show current step */}
+                <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--color-r6-muted-2)" }}>
+                  Step {currentRouteStep}
+                </span>
+              </button>
+            ))}
+          </div>
         )}
 
         {/* Status bar */}
         <div
-          className="absolute bottom-4 left-4 flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[13px] pointer-events-none"
+          className="absolute bottom-4 left-4 flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium tracking-wide pointer-events-none"
           style={{ background: "var(--color-r6-surface-glass-dim)", border: "1px solid var(--color-r6-border)", color: "var(--color-r6-muted)" }}
         >
           <span style={{ color: "var(--color-r6-accent)" }}>●</span>
@@ -1476,7 +2231,7 @@ export default function MainCanvas() {
         {/* Outdated map warning */}
         {map?.id === "fortress" && currentView === "default" && (
           <div
-            className="absolute bottom-6 right-6 px-4 py-2 rounded-lg shadow-lg text-sm font-bold z-10 pointer-events-none"
+            className="absolute top-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg shadow-lg text-sm font-bold z-10 pointer-events-none whitespace-nowrap"
             style={{ background: "rgba(239,68,68,0.9)", color: "#fff" }}
           >
             {t("warning_outdated_map", language)}
@@ -1486,15 +2241,45 @@ export default function MainCanvas() {
         {/* Zoom badge */}
         {zoomPercent !== 100 && (
           <div
-            className="absolute bottom-4 right-4 rounded-lg px-2.5 py-1 text-[13px] font-mono pointer-events-none"
-            style={{ background: "var(--color-r6-surface-glass-dim)", border: "1px solid var(--color-r6-border)", color: "var(--color-r6-muted)" }}
+            className="absolute bottom-4 right-4 rounded-lg px-2.5 py-1 text-xs font-mono pointer-events-none"
+            style={{ background: "var(--color-r6-surface-glass-dim)", border: "1px solid var(--color-r6-border)", color: "#d4d4d8" }}
           >
             {zoomPercent}%
           </div>
         )}
 
+        {/* Hidden HTML preloader — caches all floor assets for current map so
+            Konva's use-image resolves from RAM on floor switch / Undo (no flicker). */}
+        <MapPreloader currentMap={map} />
+
+        {/* Left Floating Toolbar — vertical pill of drawing tools */}
+        <div
+          className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5 w-12 z-50 pointer-events-auto"
+          style={{
+            background: "var(--color-r6-surface-glass)",
+            border: "1px solid var(--color-r6-border)",
+            borderRadius: 14,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.15)",
+            backdropFilter: "blur(8px)",
+            padding: "12px 8px",
+          }}
+        >
+          {toolConfig.map(({ id, icon, label, dividerBefore }) => (
+            <Fragment key={id}>
+              {dividerBefore && <div className="w-full" style={{ height: 1, background: "var(--color-r6-border)", margin: "2px 0" }} />}
+              <ToolBtn icon={icon} label={label} active={tool === id} onClick={() => setTool(id)} />
+            </Fragment>
+          ))}
+        </div>
+
+        {/* Tactical panel — floats right side, shows tool-contextual controls */}
+        <TacticalPanel activeTool={tool} />
+
         {/* Floating video player — always mounted to preserve video state and OCR markers */}
         <FloatingVideoPlayer />
+
+        {/* Floating GIF export window — draggable, opened from Export dropdown */}
+        <FloatingExportWindow />
       </div>
     </div>
   );

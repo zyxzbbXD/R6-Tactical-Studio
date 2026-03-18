@@ -15,6 +15,7 @@ interface SettingsState {
 
   // UI state — persisted so panel stays open across reloads
   isRightSidebarOpen: boolean;
+  rightSidebarTab: "ai" | "export";
   isSettingsOpen: boolean;
   isImportModalOpen: boolean;
 
@@ -25,6 +26,7 @@ interface SettingsState {
   setTheme: (theme: "dark" | "light") => void;
   setLanguage: (lang: string) => void;
   toggleRightSidebar: () => void;
+  openExportPanel: () => void;
   openSettings: () => void;
   closeSettings: () => void;
   openImportModal: () => void;
@@ -42,6 +44,7 @@ export const useSettingsStore = create<SettingsState>()(
       theme: "dark",
       language: "zh",
       isRightSidebarOpen: false,
+      rightSidebarTab: "ai",
       isSettingsOpen: false,
       isImportModalOpen: false,
 
@@ -51,6 +54,7 @@ export const useSettingsStore = create<SettingsState>()(
       setTheme: (theme) => set({ theme }),
       setLanguage: (language) => set({ language }),
       toggleRightSidebar: () => set((s) => ({ isRightSidebarOpen: !s.isRightSidebarOpen })),
+      openExportPanel: () => set({ isRightSidebarOpen: true, rightSidebarTab: "export" }),
       openSettings: () => set({ isSettingsOpen: true }),
       closeSettings: () => set({ isSettingsOpen: false }),
       openImportModal: () => set({ isImportModalOpen: true }),

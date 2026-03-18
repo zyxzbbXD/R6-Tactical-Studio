@@ -27,13 +27,17 @@ export default function FloatingVideoPlayer() {
   const videoMarkers      = useBoardStore((s) => s.videoMarkers);
   const addVideoMarker    = useBoardStore((s) => s.addVideoMarker);
   const clearVideoMarkers = useBoardStore((s) => s.clearVideoMarkers);
+  const syncVideoSrc      = useBoardStore((s) => s.setVideoSrc);
+  const syncVideoFileName = useBoardStore((s) => s.setVideoFileName);
+  const storeVideoSrc     = useBoardStore((s) => s.videoSrc);
+  const storeVideoFileName = useBoardStore((s) => s.videoFileName);
   const language          = useSettingsStore((s) => s.language);
 
   const [videoSrc,          setVideoSrc]          = useState<string | null>(null);
   const [fileName,          setFileName]          = useState<string>("");
   const [isPlaying,         setIsPlaying]         = useState(false);
   const [volumeLevel,       setVolumeLevel]       = useState(1);
-  const [isVolumeMenuOpen,  setIsVolumeMenuOpen]  = useState(false);
+  const lastVolumeRef = useRef(1);
   const [currentTime,       setCurrentTime]       = useState(0);
   const [duration,          setDuration]          = useState(0);
   const [isAnalyzing,       setIsAnalyzing]       = useState(false);
@@ -46,7 +50,6 @@ export default function FloatingVideoPlayer() {
   const dragRef         = useRef<HTMLDivElement>(null);
   const debugCanvasRef  = useRef<HTMLCanvasElement>(null);
   const abortRef        = useRef(false);
-  const volumeMenuRef   = useRef<HTMLDivElement>(null);
   const exportMenuRef   = useRef<HTMLDivElement>(null);
 
   // Abort any running analysis on unmount
@@ -128,9 +131,30 @@ export default function FloatingVideoPlayer() {
     };
   }, [isVideoOpen, videoMarkers]);
 
-  // Revoke object URL when file changes
+  // Sync externally-loaded video (e.g., global drag-and-drop from App.tsx)
   useEffect(() => {
-    return () => { if (videoSrc) URL.revokeObjectURL(videoSrc); };
+    if (storeVideoSrc && storeVideoSrc !== videoSrc) {
+      if (videoSrc) URL.revokeObjectURL(videoSrc);
+      setVideoSrc(storeVideoSrc);
+      setFileName(storeVideoFileName);
+      setIsPlaying(false);
+      setCurrentTime(0);
+      setDuration(0);
+      clearVideoMarkers();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeVideoSrc]);
+
+  // Revoke object URL when file changes; also clear global store reference
+  useEffect(() => {
+    return () => {
+      if (videoSrc) {
+        URL.revokeObjectURL(videoSrc);
+        syncVideoSrc(null);
+        syncVideoFileName("");
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoSrc]);
 
   // ── File load ───────────────────────────────────────────────────────────────
@@ -139,8 +163,12 @@ export default function FloatingVideoPlayer() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (videoSrc) URL.revokeObjectURL(videoSrc);
-    setVideoSrc(URL.createObjectURL(file));
+    const newSrc = URL.createObjectURL(file);
+    setVideoSrc(newSrc);
     setFileName(file.name);
+    // Sync to global store so FloatingExportWindow can access the source
+    syncVideoSrc(newSrc);
+    syncVideoFileName(file.name);
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
@@ -156,12 +184,9 @@ export default function FloatingVideoPlayer() {
     else          { v.pause(); setIsPlaying(false); }
   };
 
-  // Close volume/export menus on outside click
+  // Close export menu on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (volumeMenuRef.current && !volumeMenuRef.current.contains(e.target as Node)) {
-        setIsVolumeMenuOpen(false);
-      }
       if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
         setIsExportMenuOpen(false);
       }
@@ -176,7 +201,16 @@ export default function FloatingVideoPlayer() {
     v.muted  = level === 0;
     v.volume = level;
     setVolumeLevel(level);
-    setIsVolumeMenuOpen(false);
+    if (level > 0) lastVolumeRef.current = level;
+  };
+
+  const toggleMute = () => {
+    if (volumeLevel > 0) {
+      lastVolumeRef.current = volumeLevel;
+      setVolume(0);
+    } else {
+      setVolume(lastVolumeRef.current > 0 ? lastVolumeRef.current : 1);
+    }
   };
 
   // ── Seek helpers ────────────────────────────────────────────────────────────
@@ -189,14 +223,6 @@ export default function FloatingVideoPlayer() {
       v.addEventListener("seeked", onSeeked);
       v.currentTime = time;
     });
-
-  const handleSeekClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const v = videoRef.current;
-    if (!v || !duration || isAnalyzing) return;
-    const rect  = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    v.currentTime = ratio * duration;
-  };
 
   // ── OCR analysis ────────────────────────────────────────────────────────────
 
@@ -430,6 +456,7 @@ export default function FloatingVideoPlayer() {
     <Draggable
       nodeRef={dragRef}
       handle=".drag-handle"
+      cancel="input,button,select,textarea"
       defaultPosition={{ x: 60, y: 60 }}
       disabled={playerSize === "fullscreen"}
       position={playerSize === "fullscreen" ? { x: 0, y: 0 } : undefined}
@@ -606,10 +633,28 @@ export default function FloatingVideoPlayer() {
             {/* ── Custom seekable timeline ─────────────────────────────── */}
             <div className="px-3 pt-2 pb-1">
               <div
-                className="relative cursor-pointer rounded-full"
+                className="relative rounded-full"
                 style={{ height: 6, background: "var(--color-r6-surface-3)" }}
-                onClick={handleSeekClick}
               >
+                {/* Invisible native range input — handles all seeking interactions.
+                    Sits on top of the visual bar; opacity-0 keeps visuals clean. */}
+                <input
+                  type="range"
+                  min={0}
+                  max={duration || 100}
+                  step="any"
+                  value={currentTime}
+                  disabled={!duration || isAnalyzing}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    if (videoRef.current) videoRef.current.currentTime = val;
+                    setCurrentTime(val);
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                  style={{ margin: 0 }}
+                />
                 {/* Played portion */}
                 <div
                   className="absolute left-0 top-0 h-full rounded-full pointer-events-none"
@@ -679,51 +724,33 @@ export default function FloatingVideoPlayer() {
                 {isPlaying ? <Pause size={15} /> : <Play size={15} />}
               </button>
 
-              {/* Volume */}
-              <div ref={volumeMenuRef} className="relative">
+              {/* Volume — icon toggles mute, slider sets level */}
+              <div className="flex items-center gap-1">
                 <button
-                  onClick={() => setIsVolumeMenuOpen((o) => !o)}
+                  onClick={toggleMute}
                   className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
                   style={{ color: volumeLevel === 0 ? "var(--color-r6-accent)" : "var(--color-r6-muted)" }}
                   onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
                   onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                  title="Volume"
+                  title={volumeLevel === 0 ? "Unmute" : "Mute"}
                 >
-                  {volumeLevel === 0   ? <VolumeX  size={15} /> :
-                   volumeLevel <= 0.5  ? <Volume1  size={15} /> :
-                                         <Volume2  size={15} />}
+                  {volumeLevel === 0  ? <VolumeX size={15} /> :
+                   volumeLevel <= 0.5 ? <Volume1 size={15} /> :
+                                        <Volume2 size={15} />}
                 </button>
-
-                {isVolumeMenuOpen && (
-                  <div
-                    className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 rounded-xl py-1 text-[13px]"
-                    style={{
-                      background:  "var(--color-r6-surface)",
-                      border:      "1px solid var(--color-r6-border)",
-                      boxShadow:   "0 6px 20px rgba(0,0,0,0.55)",
-                      minWidth:    80,
-                      zIndex:      100,
-                    }}
-                  >
-                    {([1, 0.75, 0.5, 0.25, 0] as const).map((lvl) => {
-                      const label = lvl === 0 ? "Mute" : `${lvl * 100}%`;
-                      const active = volumeLevel === lvl;
-                      return (
-                        <button
-                          key={lvl}
-                          onClick={() => setVolume(lvl)}
-                          className="flex w-full items-center justify-between gap-2 px-3 py-1.5"
-                          style={{ color: active ? "var(--color-r6-accent)" : "var(--color-r6-text)" }}
-                          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
-                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                        >
-                          <span>{label}</span>
-                          {active && <span style={{ fontSize: 10 }}>✓</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={volumeLevel}
+                  onChange={(e) => setVolume(Number(e.target.value))}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  className="w-16 cursor-pointer"
+                  style={{ accentColor: "var(--color-r6-accent)", height: 4 }}
+                  title={`Volume: ${Math.round(volumeLevel * 100)}%`}
+                />
               </div>
 
               {/* Time display */}

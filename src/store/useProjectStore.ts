@@ -135,11 +135,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       board.setNotes(data.notes);
       console.log(`[ProjectStore] ✓ board restored: ${data.boardState.items.length} items, ${data.boardState.lines.length} lines`);
 
-      // Push map / floor into canvas store
+      // Push map / floor into canvas store atomically
       const canvas = useCanvasStore.getState();
       if (data.mapId) {
-        canvas.setMap(data.mapId);
-        if (data.floorId) canvas.setFloor(data.floorId);
+        if (data.floorId) canvas.setMapAndFloor(data.mapId, data.floorId);
+        else canvas.setMap(data.mapId);
         console.log(`[ProjectStore] ✓ canvas set: map=${data.mapId} floor=${data.floorId}`);
       } else {
         canvas.setMap("");

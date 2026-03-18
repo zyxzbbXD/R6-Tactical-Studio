@@ -4,5 +4,5 @@
  * avoids WKWebView's unreliable handling of custom MIME types.
  */
 export const dragState = {
-  operator: null as null | { operatorId: string; iconPath: string; name: string },
+  operator: null as null | { operatorId: string; iconPath: string; name: string; side: "atk" | "def" | "neutral" },
 };
