@@ -14,7 +14,7 @@ import {
 import type Konva from "konva";
 import useImage from "use-image";
 import {
-  Pencil, ArrowRight, Eraser, Undo2,
+  Pencil, ArrowRight, Eraser, Undo2, Trash2,
   ZoomIn, ZoomOut, Maximize2,
   Video, MapPin, ChevronDown, MousePointer2, Loader2, Bot, FileDown, Save, Upload,
   FileImage, FileText, Film, FileJson,
@@ -374,7 +374,7 @@ function Dropdown<T extends string>({
           {items.map((item) => (
             <button key={item.id}
               onClick={() => { onChange(item.id); setOpen(false); }}
-              className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-[14px]"
+              className="flex w-full items-center justify-between gap-2 pl-4 pr-3 py-1.5 text-[14px]"
               style={{ color: "var(--color-r6-text)" }}
               onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
@@ -389,20 +389,6 @@ function Dropdown<T extends string>({
   );
 }
 
-// ─── useRetainedImage ──────────────────────────────────────────────────────────
-// Wraps useImage so it returns the *previous* image while the next one is loading,
-// eliminating the white-flash between floor/map switches.
-// An empty path clears the retention immediately so disabled overlays disappear cleanly.
-function useRetainedImage(path: string): HTMLImageElement | undefined {
-  const [image, status] = useImage(path);
-  const retainedRef = useRef<HTMLImageElement | undefined>(undefined);
-  if (!path) {
-    retainedRef.current = undefined;
-    return undefined;
-  }
-  if (status === "loaded" && image) retainedRef.current = image;
-  return status === "loaded" ? image : retainedRef.current;
-}
 
 // ─── Map background layer (isolated so useImage only re-runs on path change) ──
 // Receives pre-computed paths; empty string = don't load that layer.
@@ -421,11 +407,11 @@ const MapImageLayer = memo(function MapImageLayer({
   blueprintScaleMode: "default" | "standard";
   onCenterCalculated?: (center: { x: number; y: number }) => void;
 }) {
-  const baseImage   = useRetainedImage(basePath);
-  const vertImage   = useRetainedImage(vertPath);
-  const propsImage  = useRetainedImage(propsPath);
-  const stairsImage = useRetainedImage(stairsPath);
-  const namesImage  = useRetainedImage(namesPath);
+  const [baseImage]   = useImage(basePath);
+  const [vertImage]   = useImage(vertPath);
+  const [propsImage]  = useImage(propsPath);
+  const [stairsImage] = useImage(stairsPath);
+  const [namesImage]  = useImage(namesPath);
 
   // Pixel-scan the base image to find the actual building bounding-box center.
   // We draw to an offscreen canvas and step through the alpha channel in strides of STEP
@@ -502,7 +488,7 @@ const MapImageLayer = memo(function MapImageLayer({
 // ─── Placed operator token ─────────────────────────────────────────────────────
 
 function OperatorToken({
-  item, isSelected, isTransforming, tool, status, onSelect, onUpdate, onRemove, onDblClick, onContextMenu, displayX, displayY,
+  item, isSelected, isTransforming, tool, status, onSelect, onUpdate, onRemove, onDblClick, onContextMenu, displayX, displayY, viewScaleMultiplier = 1.0,
 }: {
   item: BoardItem;
   isSelected: boolean;
@@ -516,6 +502,7 @@ function OperatorToken({
   onContextMenu: (id: string, clientX: number, clientY: number) => void;
   displayX: number;
   displayY: number;
+  viewScaleMultiplier?: number;
 }) {
   const image    = useOperatorIcon(item.iconPath);
   const groupRef = useRef<Konva.Group>(null);
@@ -529,7 +516,7 @@ function OperatorToken({
   }, [isTransforming]);
 
   const interactive  = tool === "cursor" || tool === "eraser" || tool === "route";
-  const tokenSize    = ICON_SIZE * item.scale;   // respects per-token size slider
+  const tokenSize    = ICON_SIZE * item.scale * viewScaleMultiplier;   // respects per-token size slider; shrinks in isometric view
   const half         = tokenSize / 2;
 
   return (
@@ -775,6 +762,7 @@ export default function MainCanvas({
 
   // ── Local UI state ────────────────────────────────────────────────────────
   const [selectedId,    setSelectedId]    = useState<string | null>(null);
+  const copiedItemRef = useRef<BoardItem | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ itemId: string; x: number; y: number } | null>(null);
 
@@ -895,7 +883,11 @@ export default function MainCanvas({
   // Auto-fit whenever the image finishes loading, the container resizes,
   // or the map/floor/view changes — but NOT in blueprint mode (Stage must stay untouched there).
   useEffect(() => {
-    if (imageStatus === "loaded" && currentView !== "blueprint") fitToScreen();
+    if (currentView === "blueprint" && containerSize.width > 0) {
+      fitToScreen();
+    } else if (imageStatus === "loaded" && currentView !== "blueprint") {
+      fitToScreen();
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageStatus, containerSize.width, containerSize.height, currentMapId, currentFloorId, currentView]);
 
@@ -951,6 +943,19 @@ export default function MainCanvas({
       if (tool === "route" && e.key >= "1" && e.key <= "5") {
         setCurrentRouteStep(parseInt(e.key) as 1 | 2 | 3 | 4 | 5);
       }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
+        if (selectedId) {
+          const itemToCopy = items.find((i) => i.id === selectedId);
+          if (itemToCopy) copiedItemRef.current = JSON.parse(JSON.stringify(itemToCopy));
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+        if (copiedItemRef.current) {
+          const pasted: BoardItem = { ...copiedItemRef.current, id: crypto.randomUUID(), x: copiedItemRef.current.x + 30, y: copiedItemRef.current.y + 30 };
+          addItem(pasted);
+          setSelectedId(pasted.id);
+        }
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === "z") { e.preventDefault(); undo(); }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
@@ -974,7 +979,7 @@ export default function MainCanvas({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [setTool, tool, setCurrentRouteStep, undo, currentProjectId, saveCurrentProject, isPlaying, setIsPlaying]);
+  }, [setTool, tool, setCurrentRouteStep, undo, currentProjectId, saveCurrentProject, isPlaying, setIsPlaying, selectedId, items, addItem]);
 
   // ── Wheel zoom ─────────────────────────────────────────────────────────────
   // Wheel zoom: bypass React state entirely — write directly to Konva stage.
@@ -1668,29 +1673,33 @@ export default function MainCanvas({
         )}
 
         {/* Placed operator tokens — rendered at effective route position for currentRouteStep */}
-        {items
-          .filter((i) => i.phase === currentPhase && i.floorId === currentFloorId)
-          .filter((i) => !isExportingGif || exportVisibility === "all" || i.side === "neutral" || i.side === exportVisibility)
-          .map((item) => {
-          const eff = getEffectiveRoute(item);
-          return (
-            <OperatorToken
-              key={item.id}
-              item={item}
-              isSelected={item.id === selectedId}
-              isTransforming={item.id === transformingItemId}
-              tool={tool}
-              status={eff[currentRouteStep].status}
-              onSelect={handleSelectOperator}
-              onUpdate={updateItem}
-              onRemove={(id) => { removeItem(id); handleSelectOperator(null); setTransformingItemId(null); }}
-              onDblClick={(id) => { setResizingItemId(id); setTransformingItemId(id); }}
-              onContextMenu={handleContextMenu}
-              displayX={eff[currentRouteStep].x}
-              displayY={eff[currentRouteStep].y}
-            />
-          );
-        })}
+        {(() => {
+          const viewScaleMultiplier = currentView === "isometric" ? 0.6 : 1.0;
+          return items
+            .filter((i) => i.phase === currentPhase && i.floorId === currentFloorId)
+            .filter((i) => !isExportingGif || exportVisibility === "all" || i.side === "neutral" || i.side === exportVisibility)
+            .map((item) => {
+            const eff = getEffectiveRoute(item);
+            return (
+              <OperatorToken
+                key={item.id}
+                item={item}
+                isSelected={item.id === selectedId}
+                isTransforming={item.id === transformingItemId}
+                tool={tool}
+                status={eff[currentRouteStep].status}
+                onSelect={handleSelectOperator}
+                onUpdate={updateItem}
+                onRemove={(id) => { removeItem(id); handleSelectOperator(null); setTransformingItemId(null); }}
+                onDblClick={(id) => { setResizingItemId(id); setTransformingItemId(id); }}
+                onContextMenu={handleContextMenu}
+                displayX={eff[currentRouteStep].x}
+                displayY={eff[currentRouteStep].y}
+                viewScaleMultiplier={viewScaleMultiplier}
+              />
+            );
+          });
+        })()}
 
         {/* Operator movement routes — hidden during GIF export; badges hide at current step */}
         {!isExportingGif && items
@@ -1730,7 +1739,7 @@ export default function MainCanvas({
                         strokeWidth={1.5}
                         hitStrokeWidth={14}
                         listening={isEraserActive}
-                        onClick={() => { if (isEraserActive) clearRoute(item.id); }}
+                        onClick={(e) => { e.cancelBubble = true; if (isEraserActive) { const r = { ...item.route }; delete r[step]; updateItem(item.id, { route: r }); } }}
                       />
                       <KonvaText
                         x={wp.x} y={wp.y}
@@ -1871,7 +1880,7 @@ export default function MainCanvas({
                 <button
                   key={ph}
                   onClick={() => { setPhase(ph); setPhaseOpen(false); }}
-                  className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-[14px]"
+                  className="flex w-full items-center justify-between gap-2 pl-4 pr-3 py-1.5 text-[14px]"
                   style={{ color: ph === currentPhase ? "var(--color-r6-accent)" : "var(--color-r6-text)" }}
                   onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
                   onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
@@ -1896,7 +1905,7 @@ export default function MainCanvas({
                 floor?.images.blueprint  && { id: "blueprint" as ViewMode, label: t("view_blueprint", language) },
                 floor?.images.isometric  && { id: "isometric" as ViewMode, label: t("view_isometric", language) },
               ] as const).filter(Boolean) as { id: ViewMode; label: string }[]}
-              onChange={setView}
+              onChange={(id) => { if (id !== currentView) { useBoardStore.getState().clearBoard(); setView(id); } }}
               icon={ImageIcon}
               minWidth={108}
             />
@@ -1927,6 +1936,13 @@ export default function MainCanvas({
 
         {/* Undo (Ctrl/Cmd+Z) */}
         <ToolBtn icon={Undo2} label="Undo (Ctrl+Z)" onClick={undo} />
+
+        {/* Clear All */}
+        <ToolBtn icon={Trash2} label="Clear All" onClick={() => {
+          if (window.confirm(t("Are you sure you want to clear all items?", language))) {
+            useBoardStore.getState().clearBoard();
+          }
+        }} />
 
         <div className="flex-1 shrink-0" />
 
@@ -2126,9 +2142,9 @@ export default function MainCanvas({
           <div
             style={{
               width: "100%", height: "100%",
-              opacity:   imageStatus === "loaded" ? 1 : 0.6,
-              transform: imageStatus === "loaded" ? "scale(1)" : "scale(0.99)",
-              transition: "opacity 0.2s ease-out, transform 0.2s ease-out",
+              opacity:   imageStatus === "loaded" ? 1 : 0,
+              transform: imageStatus === "loaded" ? "scale(1)" : "scale(0.97)",
+              transition: imageStatus === "loaded" ? "opacity 0.3s ease-out, transform 0.3s ease-out" : "none",
             }}
           >
             <Stage
