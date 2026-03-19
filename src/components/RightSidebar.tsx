@@ -6,6 +6,7 @@ import { Bot, FileText, Loader2, AlertCircle, Eye, Pencil } from "lucide-react";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useBoardStore } from "../store/useBoardStore";
 import { t } from "../locales/i18n";
+import { cn } from "../utils/cn";
 
 
 // ─── RightSidebar ───────────────────────────────────────────────────────────────
@@ -103,30 +104,23 @@ export default function RightSidebar({
 
   return (
     <aside
-      className="flex h-full shrink-0 flex-col"
+      className={cn(
+        "flex h-full shrink-0 flex-col overflow-hidden bg-r6-surface",
+        isRightSidebarOpen ? "border-l border-r6-border" : "border-none"
+      )}
       style={{
         width: isRightSidebarOpen ? width : 0,
         opacity: isRightSidebarOpen ? 1 : 0,
-        overflow: "hidden",
         transition: transition ?? "opacity 200ms ease",
-        background: "var(--color-r6-surface)",
-        borderLeft: isRightSidebarOpen ? "1px solid var(--color-r6-border)" : "none",
-        flexShrink: 0,
       }}
     >
     <div className="flex h-full flex-col" style={{ width }}>
       {/* ── AI Agent section ─────────────────────────────────────────────────── */}
-      <div
-        className="flex shrink-0 flex-col"
-        style={{ borderBottom: "1px solid var(--color-r6-border)" }}
-      >
+      <div className="flex shrink-0 flex-col border-b border-r6-border">
         {/* Section header */}
-        <div
-          className="flex items-center gap-2 px-4 py-3"
-          style={{ borderBottom: "1px solid var(--color-r6-border)" }}
-        >
-          <Bot size={17} style={{ color: "var(--color-r6-accent)" }} />
-          <span className="text-sm font-bold tracking-wide uppercase whitespace-nowrap" style={{ color: "var(--color-r6-muted)" }}>
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-r6-border">
+          <Bot size={17} className="text-r6-accent" />
+          <span className="text-sm font-bold tracking-wide uppercase whitespace-nowrap text-r6-muted">
             {t("AI Tactic Agent", language)}
           </span>
         </div>
@@ -138,22 +132,14 @@ export default function RightSidebar({
             onChange={(e) => setInputText(e.target.value)}
             placeholder={t("ai_input_placeholder", language)}
             rows={6}
-            className="w-full resize-none rounded-xl px-3 py-2 text-[13px] leading-relaxed outline-none transition-colors"
-            style={{
-              background: "var(--color-r6-surface-2)",
-              border: "1px solid var(--color-r6-border)",
-              color: "var(--color-r6-text)",
-              caretColor: "var(--color-r6-accent)",
-            }}
-            onFocus={(e) => (e.currentTarget.style.borderColor = "var(--color-r6-accent)")}
-            onBlur={(e) => (e.currentTarget.style.borderColor = "var(--color-r6-border)")}
+            className="w-full resize-none rounded-xl px-3 py-2 text-[13px] leading-relaxed outline-none transition-colors bg-r6-surface-2 border border-r6-border text-r6-text caret-r6-accent focus:border-r6-accent"
           />
 
           {/* Error */}
           {error && (
             <div
-              className="flex items-start gap-2 rounded-xl px-3 py-2 text-[13px] leading-snug"
-              style={{ background: "rgba(232,93,42,0.1)", border: "1px solid rgba(232,93,42,0.3)", color: "#f97316" }}
+              className="flex items-start gap-2 rounded-xl px-3 py-2 text-[13px] leading-snug text-orange-400"
+              style={{ background: "rgba(232,93,42,0.1)", border: "1px solid rgba(232,93,42,0.3)" }}
             >
               <AlertCircle size={14} className="mt-0.5 shrink-0" />
               {error}
@@ -164,8 +150,7 @@ export default function RightSidebar({
           {isLoading ? (
             <button
               onClick={handleCancel}
-              className="flex items-center justify-center gap-2 rounded-xl py-2.5 text-[13px] font-medium transition-opacity"
-              style={{ background: "var(--color-r6-surface-3)", color: "var(--color-r6-muted)", border: "1px solid var(--color-r6-border)" }}
+              className="flex items-center justify-center gap-2 rounded-xl py-2.5 text-[13px] font-medium transition-opacity bg-r6-surface-3 text-r6-muted border border-r6-border"
             >
               <Loader2 size={15} className="animate-spin" />
               {t("Generating", language)}
@@ -173,10 +158,7 @@ export default function RightSidebar({
           ) : (
             <button
               onClick={handleGenerate}
-              className="flex items-center justify-center gap-2 rounded-xl py-2.5 text-[13px] font-medium transition-opacity"
-              style={{ background: "var(--color-r6-accent)", color: "#fff" }}
-              onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
-              onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+              className="flex items-center justify-center gap-2 rounded-xl py-2.5 text-[13px] font-medium transition-opacity bg-r6-accent text-white hover:opacity-85"
             >
               <Bot size={15} />
               {t("Generate Tactic Table", language)}
@@ -185,31 +167,24 @@ export default function RightSidebar({
         </div>
       </div>
 
-      {/* ── Notes / Markdown section ─────────────────────────────────────────── */}
+      {/* ── Notes / Markdown section ─────────────────────────────────────── */}
       <div className="flex min-h-0 flex-1 flex-col">
         {/* Section header + tabs */}
-        <div
-          className="flex shrink-0 items-center gap-1 px-3 py-2"
-          style={{ borderBottom: "1px solid var(--color-r6-border)" }}
-        >
-          <FileText size={15} style={{ color: "var(--color-r6-muted)" }} />
-          <span className="flex-1 text-[14px] font-semibold tracking-wide uppercase" style={{ color: "var(--color-r6-muted)" }}>
+        <div className="flex shrink-0 items-center gap-1 px-3 py-2 border-b border-r6-border">
+          <FileText size={15} className="text-r6-muted" />
+          <span className="flex-1 text-[14px] font-semibold tracking-wide uppercase text-r6-muted">
             {t("Notes", language)}
           </span>
           {/* Tab toggle */}
-          <div
-            className="flex rounded-lg overflow-hidden"
-            style={{ border: "1px solid var(--color-r6-border)" }}
-          >
+          <div className="flex rounded-lg overflow-hidden border border-r6-border">
             {(["preview", "edit"] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setNotesTab(tab)}
-                className="flex items-center gap-1 px-2.5 py-1 text-[13px] transition-colors"
-                style={{
-                  background: notesTab === tab ? "var(--color-r6-accent-dim)" : "transparent",
-                  color: notesTab === tab ? "var(--color-r6-accent)" : "var(--color-r6-muted)",
-                }}
+                className={cn(
+                  "flex items-center gap-1 px-2.5 py-1 text-[13px] transition-colors",
+                  notesTab === tab ? "bg-r6-accent-dim text-r6-accent" : "bg-transparent text-r6-muted"
+                )}
               >
                 {tab === "preview" ? <Eye size={13} /> : <Pencil size={13} />}
                 {tab === "preview" ? t("Preview", language) : t("Edit", language)}
@@ -225,27 +200,17 @@ export default function RightSidebar({
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder={"AI output appears here.\nYou can also type notes manually."}
-              className="h-full w-full resize-none px-4 py-3 text-sm leading-relaxed outline-none"
-              style={{
-                background: "transparent",
-                color: "var(--color-r6-text)",
-                caretColor: "var(--color-r6-accent)",
-                fontFamily: "ui-monospace, monospace",
-              }}
+              className="h-full w-full resize-none px-4 py-3 text-sm leading-relaxed outline-none bg-transparent text-r6-text caret-r6-accent font-mono"
             />
           ) : notes ? (
-            <div
-              className="prose-r6 px-4 py-3 text-sm leading-relaxed"
-              style={{ color: "var(--color-r6-text)" }}
-            >
+            <div className="prose-r6 px-4 py-3 text-sm leading-relaxed text-r6-text">
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{notes}</ReactMarkdown>
             </div>
           ) : (
             <div className="flex h-full items-center justify-center">
-              <p
-                className="text-[13px] leading-relaxed"
-                style={{ color: "var(--color-r6-muted-2)", fontFamily: "ui-monospace, monospace", whiteSpace: "pre-line" }}
-              >{t("ai_placeholder_text", language)}</p>
+              <p className="text-[13px] leading-relaxed text-r6-muted-2 font-mono whitespace-pre-line">
+                {t("ai_placeholder_text", language)}
+              </p>
             </div>
           )}
         </div>

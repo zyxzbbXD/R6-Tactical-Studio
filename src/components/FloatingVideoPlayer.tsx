@@ -9,6 +9,7 @@ import {
 import { useBoardStore } from "../store/useBoardStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { t } from "../locales/i18n";
+import { cn } from "../utils/cn";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -166,7 +167,6 @@ export default function FloatingVideoPlayer() {
     const newSrc = URL.createObjectURL(file);
     setVideoSrc(newSrc);
     setFileName(file.name);
-    // Sync to global store so FloatingExportWindow can access the source
     syncVideoSrc(newSrc);
     syncVideoFileName(file.name);
     setIsPlaying(false);
@@ -251,19 +251,16 @@ export default function FloatingVideoPlayer() {
     const totalSteps    = Math.ceil(videoDuration / step);
     let   stepIdx       = 0;
 
-    // OCR the current video frame in a specific UI mode
     const ocrFrameMode = async (mode: "broadcast" | "pov"): Promise<number | null> => {
       const vw = v.videoWidth;
       const vh = v.videoHeight;
-      // broadcast: timer sits at ~5% from top, 6%×6% crop
-      // pov:       timer is ~3% higher and ~5% larger
       const bSy = vh * 0.05;
       const bSw = vw * 0.06;
       const bSh = vh * 0.06;
       const sy = Math.floor(mode === "pov" ? bSy - vh * 0.03 : bSy);
       const sw = Math.floor(mode === "pov" ? bSw * 1.05      : bSw);
       const sh = Math.floor(mode === "pov" ? bSh * 1.05      : bSh);
-      const sx = Math.floor(vw * 0.47 - (sw - Math.floor(bSw)) / 2); // keep centered
+      const sx = Math.floor(vw * 0.47 - (sw - Math.floor(bSw)) / 2);
       offscreen.width  = sw;
       offscreen.height = sh;
       ctx.drawImage(v, sx, Math.max(0, sy), sw, sh, 0, 0, sw, sh);
@@ -274,16 +271,14 @@ export default function FloatingVideoPlayer() {
       return remaining <= 180 ? remaining : null;
     };
 
-    // Dual-mode OCR: tries currentUIMode first; falls back to the other and re-locks if successful
     let currentUIMode: "broadcast" | "pov" = "broadcast";
     const ocrFrame = async (): Promise<number | null> => {
       let result = await ocrFrameMode(currentUIMode);
       if (result === null) {
         const fallback = currentUIMode === "broadcast" ? "pov" : "broadcast";
         result = await ocrFrameMode(fallback);
-        if (result !== null) currentUIMode = fallback; // re-lock to whichever mode works
+        if (result !== null) currentUIMode = fallback;
       }
-      // Update debug canvas with the last crop drawn
       const dbg = debugCanvasRef.current;
       if (dbg) {
         dbg.width  = offscreen.width;
@@ -293,7 +288,6 @@ export default function FloatingVideoPlayer() {
       return result;
     };
 
-    // Binary-search the exact second the timer permanently disappears
     const binarySearchRoundEnd = async (left: number, right: number): Promise<number> => {
       const clampedRight = Math.min(right, videoDuration);
       let lo = left, hi = clampedRight;
@@ -307,9 +301,6 @@ export default function FloatingVideoPlayer() {
       return hi;
     };
 
-    // Neighborhood tracker — tolerates brief camera cuts (no snap-to-end on first miss)
-    // `partial` = true when the round started before the recording began (inferredStart < 0);
-    // partial rounds are tracked for continuity but never emitted as markers.
     let activeRound: { actionStart: number; lastValidTime: number; partial: boolean } | null = null;
 
     for (let t2 = 0; t2 < videoDuration && !abortRef.current; t2 += step) {
@@ -321,7 +312,6 @@ export default function FloatingVideoPlayer() {
         const isPartial     = inferredStart < 0;
 
         if (!activeRound) {
-          // New round detected — only emit markers if the round starts within the video
           if (!isPartial) {
             addVideoMarker({ time: Math.max(0, inferredStart - 30), label: "Prep Phase" });
             addVideoMarker({ time: inferredStart,                   label: "Action Phase" });
@@ -329,11 +319,9 @@ export default function FloatingVideoPlayer() {
           activeRound = { actionStart: inferredStart, lastValidTime: t2, partial: isPartial };
 
         } else if (Math.abs(inferredStart - activeRound.actionStart) <= 60) {
-          // Still in the same round — update last known valid position
           activeRound.lastValidTime = t2;
 
         } else {
-          // Timer jumped → close out previous round, start a new one
           if (!activeRound.partial) {
             const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
             addVideoMarker({ time: endTime, label: "Round End" });
@@ -346,7 +334,6 @@ export default function FloatingVideoPlayer() {
         }
 
       } else {
-        // No timer — only declare round over once we've exceeded the max round window
         if (activeRound && t2 > activeRound.actionStart + 250) {
           if (!activeRound.partial) {
             const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
@@ -360,7 +347,6 @@ export default function FloatingVideoPlayer() {
       setAnalyzeProgress(Math.round((stepIdx / totalSteps) * 100));
     }
 
-    // Final cleanup: close any complete round still active at end-of-video
     if (!abortRef.current && activeRound && !activeRound.partial) {
       const endTime = await binarySearchRoundEnd(
         activeRound.lastValidTime,
@@ -379,7 +365,6 @@ export default function FloatingVideoPlayer() {
   // ── FFmpeg script export ─────────────────────────────────────────────────────
 
   const generateFFmpegScript = (os: "win" | "mac") => {
-    // Pair markers into rounds: (Prep Phase | Action Phase) → Round End
     const sorted = [...videoMarkers].sort((a, b) => a.time - b.time);
     const rounds: { roundNum: number; start: number; end: number }[] = [];
     let roundStart: number | null = null;
@@ -394,7 +379,6 @@ export default function FloatingVideoPlayer() {
       }
     }
 
-    // Format seconds → HH:MM:SS for ffmpeg
     const ts = (s: number) => {
       const h   = Math.floor(s / 3600);
       const m   = Math.floor((s % 3600) / 60);
@@ -463,34 +447,29 @@ export default function FloatingVideoPlayer() {
     >
       <div
         ref={dragRef}
-        className="absolute top-0 left-0 flex flex-col overflow-hidden rounded-2xl shadow-2xl"
+        className={cn(
+          "absolute top-0 left-0 flex-col overflow-hidden rounded-2xl shadow-2xl bg-r6-surface-glass border border-r6-border backdrop-blur-lg",
+          isVideoOpen ? "flex" : "hidden",
+          playerSize === "fullscreen" && "inset-0 rounded-none"
+        )}
         style={{
           zIndex: 9999,
-          background: "var(--color-r6-surface-glass)",
-          border: "1px solid var(--color-r6-border)",
-          backdropFilter: "blur(16px)",
-          display: isVideoOpen ? "flex" : "none",
           width:  playerSize === "fullscreen" ? "100%" : playerSize === "large" ? 800 : 480,
           height: playerSize === "fullscreen" ? "100%" : "auto",
-          ...(playerSize === "fullscreen" && { position: "absolute" as const, inset: 0, borderRadius: 0 }),
         }}
       >
         {/* ── Title bar (drag handle) ─────────────────────────────────────── */}
         <div
-          className="drag-handle flex cursor-grab items-center gap-2 px-3 py-2 select-none active:cursor-grabbing"
-          style={{ borderBottom: "1px solid var(--color-r6-border)", background: "var(--color-r6-surface-glass-dim)" }}
+          className="drag-handle flex cursor-grab items-center gap-2 px-3 py-2 select-none active:cursor-grabbing border-b border-r6-border bg-r6-surface-glass-dim"
           onDoubleClick={() => setPlayerSize((prev) => prev === "fullscreen" ? "standard" : "fullscreen")}
         >
-          <GripHorizontal size={17} style={{ color: "var(--color-r6-muted-2)", flexShrink: 0 }} />
-          <span className="flex-1 truncate text-[14px] font-medium" style={{ color: "var(--color-r6-muted)" }}>
+          <GripHorizontal size={17} className="text-r6-muted-2 shrink-0" />
+          <span className="flex-1 truncate text-[14px] font-medium text-r6-muted">
             {fileName || t("Video Review", language)}
           </span>
 
           {/* Size selector */}
-          <div
-            className="flex items-center rounded-lg overflow-hidden shrink-0"
-            style={{ border: "1px solid var(--color-r6-border)", background: "var(--color-r6-surface-2)" }}
-          >
+          <div className="flex items-center rounded-lg overflow-hidden shrink-0 border border-r6-border bg-r6-surface-2">
             {(["standard", "large", "fullscreen"] as const).map((size, i) => {
               const Icon   = size === "standard" ? Square : size === "large" ? Maximize2 : Expand;
               const titles = [
@@ -504,14 +483,11 @@ export default function FloatingVideoPlayer() {
                   key={size}
                   title={titles[i]}
                   onClick={() => setPlayerSize(size)}
-                  className="flex h-7 w-7 items-center justify-center transition-colors"
-                  style={{
-                    color:      active ? "var(--color-r6-accent)" : "var(--color-r6-muted)",
-                    background: active ? "var(--color-r6-accent-dim)" : "transparent",
-                    borderRight: size !== "fullscreen" ? "1px solid var(--color-r6-border)" : undefined,
-                  }}
-                  onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = "var(--color-r6-text)"; }}
-                  onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = "var(--color-r6-muted)"; }}
+                  className={cn(
+                    "flex h-7 w-7 items-center justify-center transition-colors",
+                    active ? "text-r6-accent bg-r6-accent-dim" : "text-r6-muted bg-transparent hover:text-r6-text",
+                    size !== "fullscreen" && "border-r border-r6-border"
+                  )}
                 >
                   <Icon size={13} />
                 </button>
@@ -522,10 +498,7 @@ export default function FloatingVideoPlayer() {
           <button
             title="Open video file"
             onClick={() => fileRef.current?.click()}
-            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[13px] font-medium transition-colors"
-            style={{ background: "var(--color-r6-surface-2)", color: "var(--color-r6-muted)", border: "1px solid var(--color-r6-border)" }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--color-r6-text)"; e.currentTarget.style.borderColor = "var(--color-r6-muted-2)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; }}
+            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[13px] font-medium transition-colors bg-r6-surface-2 text-r6-muted border border-r6-border hover:text-r6-text hover:border-r6-border-light"
           >
             <FolderOpen size={13} />
             {t("Open", language)}
@@ -534,10 +507,7 @@ export default function FloatingVideoPlayer() {
           <button
             title="Close video player"
             onClick={toggleVideo}
-            className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors"
-            style={{ color: "var(--color-r6-muted)" }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(232,93,42,0.15)"; e.currentTarget.style.color = "var(--color-r6-accent)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--color-r6-muted)"; }}
+            className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors text-r6-muted hover:bg-r6-accent-dim hover:text-r6-accent"
           >
             <X size={15} />
           </button>
@@ -545,13 +515,10 @@ export default function FloatingVideoPlayer() {
 
         {/* ── Video area ──────────────────────────────────────────────────── */}
         <div
-          className="relative flex items-center justify-center"
-          style={{
-            background: "#000",
-            ...(playerSize === "fullscreen"
-              ? { flex: 1, minHeight: 0 }
-              : { flex: "none", height: "auto", aspectRatio: "16/9" }),
-          }}
+          className={cn(
+            "relative flex items-center justify-center bg-black",
+            playerSize === "fullscreen" ? "flex-1 min-h-0" : "flex-none aspect-video"
+          )}
           onDoubleClick={() => setPlayerSize((prev) => prev === "fullscreen" ? "standard" : "fullscreen")}
         >
           {videoSrc ? (
@@ -568,30 +535,23 @@ export default function FloatingVideoPlayer() {
           ) : (
             <button
               onClick={() => fileRef.current?.click()}
-              className="flex flex-col items-center gap-3 rounded-2xl px-8 py-6 transition-colors"
-              style={{ color: "var(--color-r6-muted)" }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "var(--color-r6-text)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--color-r6-muted)"; }}
+              className="flex flex-col items-center gap-3 rounded-2xl px-8 py-6 transition-colors text-r6-muted hover:bg-r6-surface-2 hover:text-r6-text"
             >
               <FolderOpen size={38} />
               <span className="text-[15px]">{t("Click to open", language)}</span>
-              <span className="text-[13px]" style={{ color: "var(--color-r6-muted-2)" }}>{t("File formats", language)}</span>
+              <span className="text-[13px] text-r6-muted-2">{t("File formats", language)}</span>
             </button>
           )}
 
           {/* Debug crop canvas — top-left, only during analysis */}
           {isAnalyzing && (
-            <div
-              className="absolute top-2 left-2 overflow-hidden rounded-lg"
-              style={{ border: "1px solid var(--color-r6-accent)", background: "#000" }}
-            >
+            <div className="absolute top-2 left-2 overflow-hidden rounded-lg border border-r6-accent bg-black">
               <canvas
                 ref={debugCanvasRef}
                 style={{ display: "block", width: 160, imageRendering: "pixelated" }}
               />
-              <div
-                className="px-1 py-0.5 text-center text-[11px] font-mono uppercase tracking-wider"
-                style={{ color: "var(--color-r6-accent)", background: "rgba(0,0,0,0.8)" }}
+              <div className="px-1 py-0.5 text-center text-[11px] font-mono uppercase tracking-wider text-r6-accent"
+                style={{ background: "rgba(0,0,0,0.8)" }}
               >
                 {t("OCR crop", language)}
               </div>
@@ -601,24 +561,21 @@ export default function FloatingVideoPlayer() {
           {/* Analysis overlay — centered, semi-transparent */}
           {isAnalyzing && (
             <div
-              className="absolute inset-0 flex flex-col items-center justify-center gap-2"
-              style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(2px)" }}
+              className="absolute inset-0 flex flex-col items-center justify-center gap-2 backdrop-blur-[2px]"
+              style={{ background: "rgba(0,0,0,0.55)" }}
             >
-              <Scan size={28} style={{ color: "var(--color-r6-accent)" }} className="animate-pulse" />
-              <p className="text-[15px] font-semibold" style={{ color: "var(--color-r6-text)" }}>
+              <Scan size={28} className="text-r6-accent animate-pulse" />
+              <p className="text-[15px] font-semibold text-r6-text">
                 {t("Analyzing", language)} {analyzeProgress}%
               </p>
-              <div
-                className="w-40 overflow-hidden rounded-full"
-                style={{ height: 4, background: "var(--color-r6-surface-3)" }}
-              >
+              <div className="w-40 overflow-hidden rounded-full h-1 bg-r6-surface-3">
                 <div
-                  className="h-full rounded-full transition-all duration-300"
-                  style={{ width: `${analyzeProgress}%`, background: "var(--color-r6-accent)" }}
+                  className="h-full rounded-full transition-all duration-300 bg-r6-accent"
+                  style={{ width: `${analyzeProgress}%` }}
                 />
               </div>
               {videoMarkers.length > 0 && (
-                <p className="text-[13px]" style={{ color: "#facc15" }}>
+                <p className="text-[13px] text-yellow-400">
                   {videoMarkers.length} {t("phases found so far", language)}
                 </p>
               )}
@@ -628,16 +585,12 @@ export default function FloatingVideoPlayer() {
 
         {/* ── Controls + timeline (only when video loaded) ──────────────── */}
         {videoSrc && (
-          <div style={{ borderTop: "1px solid var(--color-r6-border)" }}>
+          <div className="border-t border-r6-border">
 
             {/* ── Custom seekable timeline ─────────────────────────────── */}
             <div className="px-3 pt-2 pb-1">
-              <div
-                className="relative rounded-full"
-                style={{ height: 6, background: "var(--color-r6-surface-3)" }}
-              >
-                {/* Invisible native range input — handles all seeking interactions.
-                    Sits on top of the visual bar; opacity-0 keeps visuals clean. */}
+              <div className="relative rounded-full h-1.5 bg-r6-surface-3">
+                {/* Invisible native range input — handles all seeking interactions */}
                 <input
                   type="range"
                   min={0}
@@ -652,22 +605,19 @@ export default function FloatingVideoPlayer() {
                   }}
                   onMouseDown={(e) => e.stopPropagation()}
                   onTouchStart={(e) => e.stopPropagation()}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                  style={{ margin: 0 }}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 m-0"
                 />
                 {/* Played portion */}
                 <div
-                  className="absolute left-0 top-0 h-full rounded-full pointer-events-none"
-                  style={{ width: `${progressPct}%`, background: "var(--color-r6-accent)" }}
+                  className="absolute left-0 top-0 h-full rounded-full pointer-events-none bg-r6-accent"
+                  style={{ width: `${progressPct}%` }}
                 />
 
                 {/* Seek thumb */}
                 <div
-                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 h-3.5 w-3.5 rounded-full pointer-events-none"
+                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 h-3.5 w-3.5 rounded-full pointer-events-none bg-r6-accent border-2 border-white"
                   style={{
                     left: `${progressPct}%`,
-                    background: "var(--color-r6-accent)",
-                    border: "2px solid #fff",
                     boxShadow: "0 0 4px rgba(232,93,42,0.6)",
                   }}
                 />
@@ -690,13 +640,10 @@ export default function FloatingVideoPlayer() {
                         const v = videoRef.current;
                         if (v) v.currentTime = marker.time;
                       }}
-                      className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-md"
+                      className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-md cursor-pointer w-[3px] h-3.5"
                       style={{
                         left: `${pct}%`,
-                        width: 3,
-                        height: 14,
                         background: color,
-                        cursor: "pointer",
                         boxShadow: shadow,
                       }}
                     />
@@ -712,14 +659,10 @@ export default function FloatingVideoPlayer() {
               <button
                 onClick={togglePlay}
                 disabled={isAnalyzing}
-                className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
-                style={{
-                  background: "var(--color-r6-accent)",
-                  color: "#fff",
-                  opacity: isAnalyzing ? 0.4 : 1,
-                }}
-                onMouseEnter={(e) => { if (!isAnalyzing) e.currentTarget.style.opacity = "0.85"; }}
-                onMouseLeave={(e) => { if (!isAnalyzing) e.currentTarget.style.opacity = "1"; }}
+                className={cn(
+                  "flex h-8 w-8 items-center justify-center rounded-lg transition-colors bg-r6-accent text-white",
+                  isAnalyzing ? "opacity-40" : "opacity-100 hover:opacity-85"
+                )}
               >
                 {isPlaying ? <Pause size={15} /> : <Play size={15} />}
               </button>
@@ -728,10 +671,10 @@ export default function FloatingVideoPlayer() {
               <div className="flex items-center gap-1">
                 <button
                   onClick={toggleMute}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
-                  style={{ color: volumeLevel === 0 ? "var(--color-r6-accent)" : "var(--color-r6-muted)" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  className={cn(
+                    "flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-r6-surface-2",
+                    volumeLevel === 0 ? "text-r6-accent" : "text-r6-muted"
+                  )}
                   title={volumeLevel === 0 ? "Unmute" : "Mute"}
                 >
                   {volumeLevel === 0  ? <VolumeX size={15} /> :
@@ -747,17 +690,13 @@ export default function FloatingVideoPlayer() {
                   onChange={(e) => setVolume(Number(e.target.value))}
                   onMouseDown={(e) => e.stopPropagation()}
                   onTouchStart={(e) => e.stopPropagation()}
-                  className="w-16 cursor-pointer"
-                  style={{ accentColor: "var(--color-r6-accent)", height: 4 }}
+                  className="w-16 cursor-pointer h-1 accent-r6-accent"
                   title={`Volume: ${Math.round(volumeLevel * 100)}%`}
                 />
               </div>
 
               {/* Time display */}
-              <span
-                className="text-[13px] font-mono tabular-nums"
-                style={{ color: "var(--color-r6-muted)" }}
-              >
+              <span className="text-[13px] font-mono tabular-nums text-r6-muted">
                 {fmt(currentTime)} / {fmt(duration)}
               </span>
 
@@ -781,18 +720,14 @@ export default function FloatingVideoPlayer() {
                     <button
                       title="Previous marker"
                       onClick={() => navBtn("prev")}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors"
-                      style={{ color: "var(--color-r6-muted)", background: "var(--color-r6-surface-2)", border: "1px solid var(--color-r6-border)" }}
-                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--color-r6-text)"; e.currentTarget.style.borderColor = "var(--color-r6-muted-2)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; }}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors text-r6-muted bg-r6-surface-2 border border-r6-border hover:text-r6-text hover:border-r6-muted-2"
                     >
                       <ChevronLeft size={14} />
                     </button>
                     <span
-                      className="text-[12px] rounded-lg px-2 py-0.5 font-medium"
+                      className="text-[12px] rounded-lg px-2 py-0.5 font-medium text-yellow-400"
                       style={{
                         background: "rgba(250,204,21,0.12)",
-                        color: "#facc15",
                         border: "1px solid rgba(250,204,21,0.3)",
                       }}
                     >
@@ -801,10 +736,7 @@ export default function FloatingVideoPlayer() {
                     <button
                       title="Next marker"
                       onClick={() => navBtn("next")}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors"
-                      style={{ color: "var(--color-r6-muted)", background: "var(--color-r6-surface-2)", border: "1px solid var(--color-r6-border)" }}
-                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--color-r6-text)"; e.currentTarget.style.borderColor = "var(--color-r6-muted-2)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; }}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors text-r6-muted bg-r6-surface-2 border border-r6-border hover:text-r6-text hover:border-r6-muted-2"
                     >
                       <ChevronRight size={14} />
                     </button>
@@ -817,27 +749,14 @@ export default function FloatingVideoPlayer() {
                 title="Scan video for phase start times (OCR)"
                 onClick={handleAnalyze}
                 disabled={isAnalyzing || !duration}
-                className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors"
-                style={{
-                  background: isAnalyzing ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-                  color:      isAnalyzing ? "var(--color-r6-accent)"     : "var(--color-r6-muted)",
-                  border:     isAnalyzing ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
-                  opacity: (!duration || isAnalyzing) ? 0.7 : 1,
-                }}
-                onMouseEnter={(e) => {
-                  if (!isAnalyzing && duration) {
-                    e.currentTarget.style.background   = "var(--color-r6-accent-dim)";
-                    e.currentTarget.style.color        = "var(--color-r6-accent)";
-                    e.currentTarget.style.borderColor  = "var(--color-r6-accent)";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isAnalyzing) {
-                    e.currentTarget.style.background  = "var(--color-r6-surface-2)";
-                    e.currentTarget.style.color       = "var(--color-r6-muted)";
-                    e.currentTarget.style.borderColor = "var(--color-r6-border)";
-                  }
-                }}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors border",
+                  isAnalyzing
+                    ? "bg-r6-accent-dim text-r6-accent border-r6-accent opacity-70"
+                    : "bg-r6-surface-2 text-r6-muted border-r6-border",
+                  !duration && "opacity-70",
+                  !isAnalyzing && duration && "hover:bg-r6-accent-dim hover:text-r6-accent hover:border-r6-accent"
+                )}
               >
                 <Scan size={14} />
                 {isAnalyzing ? `${analyzeProgress}%` : t("Analyze", language)}
@@ -849,14 +768,12 @@ export default function FloatingVideoPlayer() {
                   <button
                     title={t("Export Clips", language)}
                     onClick={() => setIsExportMenuOpen((o) => !o)}
-                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors whitespace-nowrap"
-                    style={{
-                      background: isExportMenuOpen ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-                      color:      isExportMenuOpen ? "var(--color-r6-accent)"     : "var(--color-r6-muted)",
-                      border:     isExportMenuOpen ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
-                    }}
-                    onMouseEnter={(e) => { if (!isExportMenuOpen) { e.currentTarget.style.background = "var(--color-r6-accent-dim)"; e.currentTarget.style.color = "var(--color-r6-accent)"; e.currentTarget.style.borderColor = "var(--color-r6-accent)"; } }}
-                    onMouseLeave={(e) => { if (!isExportMenuOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors whitespace-nowrap border",
+                      isExportMenuOpen
+                        ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
+                        : "bg-r6-surface-2 text-r6-muted border-r6-border hover:bg-r6-accent-dim hover:text-r6-accent hover:border-r6-accent"
+                    )}
                   >
                     <Download size={14} />
                     {t("Export Clips", language)}
@@ -864,14 +781,8 @@ export default function FloatingVideoPlayer() {
 
                   {isExportMenuOpen && (
                     <div
-                      className="absolute bottom-full right-0 mb-2 rounded-xl py-1 text-[13px]"
-                      style={{
-                        background: "var(--color-r6-surface)",
-                        border:     "1px solid var(--color-r6-border)",
-                        boxShadow:  "0 6px 20px rgba(0,0,0,0.55)",
-                        minWidth:   180,
-                        zIndex:     100,
-                      }}
+                      className="absolute bottom-full right-0 mb-2 rounded-xl py-1 text-[13px] bg-r6-surface border border-r6-border z-[100]"
+                      style={{ boxShadow: "0 6px 20px rgba(0,0,0,0.55)", minWidth: 180 }}
                     >
                       {([
                         { label: "Export FFmpeg (.bat)", os: "win" as const },
@@ -880,12 +791,9 @@ export default function FloatingVideoPlayer() {
                         <button
                           key={os}
                           onClick={() => generateFFmpegScript(os)}
-                          className="flex w-full items-center gap-2 px-3 py-2"
-                          style={{ color: "var(--color-r6-text)" }}
-                          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
-                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-r6-text hover:bg-r6-surface-2"
                         >
-                          <Download size={13} style={{ color: "var(--color-r6-muted)" }} />
+                          <Download size={13} className="text-r6-muted" />
                           {label}
                         </button>
                       ))}

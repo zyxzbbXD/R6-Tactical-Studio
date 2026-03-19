@@ -49,8 +49,8 @@ export const MAPS: MapConfig[] = [
     id: "border",
     name: "Border",
     floors: [
-      { id: "1f",   label: "1F",   images: { default: "/maps/border/1f_default.jpg",   isometric: "/maps/border/1f_isometric.webp" } },
-      { id: "2f",   label: "2F",   images: { default: "/maps/border/2f_default.jpg",   isometric: "/maps/border/2f_isometric.webp" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/border/1f_default.jpg",   blueprint: "/maps/border/1f_blueprint.png", isometric: "/maps/border/1f_isometric.webp" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/border/2f_default.jpg",   blueprint: "/maps/border/2f_blueprint.png", isometric: "/maps/border/2f_isometric.webp" } },
       { id: "roof", label: "Roof", images: { default: "/maps/border/roof_default.jpg" } },
     ],
   },
@@ -97,9 +97,9 @@ export const MAPS: MapConfig[] = [
     id: "kafe",
     name: "Kafe Dostoyevsky",
     floors: [
-      { id: "1f",   label: "1F",   images: { default: "/maps/kafe/1f_default.jpg",   isometric: "/maps/kafe/1f_isometric.webp" } },
-      { id: "2f",   label: "2F",   images: { default: "/maps/kafe/2f_default.jpg",   isometric: "/maps/kafe/2f_isometric.webp" } },
-      { id: "3f",   label: "3F",   images: { default: "/maps/kafe/3f_default.jpg",   isometric: "/maps/kafe/3f_isometric.webp" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/kafe/1f_default.jpg",   blueprint: "/maps/kafe/1f_blueprint.png", isometric: "/maps/kafe/1f_isometric.webp" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/kafe/2f_default.jpg",   blueprint: "/maps/kafe/2f_blueprint.png", isometric: "/maps/kafe/2f_isometric.webp" } },
+      { id: "3f",   label: "3F",   images: { default: "/maps/kafe/3f_default.jpg",   blueprint: "/maps/kafe/3f_blueprint.png", isometric: "/maps/kafe/3f_isometric.webp" } },
       { id: "roof", label: "Roof", images: { default: "/maps/kafe/roof_default.jpg" } },
     ],
   },
@@ -117,9 +117,9 @@ export const MAPS: MapConfig[] = [
     id: "nighthavenlabs",
     name: "Nighthaven Labs",
     floors: [
-      { id: "b1",   label: "B1",   images: { default: "/maps/nighthavenlabs/b1_default.jpg",   isometric: "/maps/nighthavenlabs/b1_isometric.webp" } },
-      { id: "1f",   label: "1F",   images: { default: "/maps/nighthavenlabs/1f_default.jpg",   isometric: "/maps/nighthavenlabs/1f_isometric.webp" } },
-      { id: "2f",   label: "2F",   images: { default: "/maps/nighthavenlabs/2f_default.jpg",   isometric: "/maps/nighthavenlabs/2f_isometric.webp" } },
+      { id: "b1",   label: "B1",   images: { default: "/maps/nighthavenlabs/b1_default.jpg",   blueprint: "/maps/nighthavenlabs/b1_blueprint.png", isometric: "/maps/nighthavenlabs/b1_isometric.webp" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/nighthavenlabs/1f_default.jpg",   blueprint: "/maps/nighthavenlabs/1f_blueprint.png", isometric: "/maps/nighthavenlabs/1f_isometric.webp" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/nighthavenlabs/2f_default.jpg",   blueprint: "/maps/nighthavenlabs/2f_blueprint.png", isometric: "/maps/nighthavenlabs/2f_isometric.webp" } },
       { id: "roof", label: "Roof", images: { default: "/maps/nighthavenlabs/roof_default.jpg" } },
     ],
   },
@@ -237,4 +237,34 @@ export const GADGETS: GadgetConfig[] = [
   { id: "gadget-shield",         name: "Shield",             iconPath: "/gadgets/Shield.webp"           },
   { id: "gadget-smoke-grenade",  name: "Smoke Grenade",      iconPath: "/gadgets/Smoke.webp"            },
   { id: "gadget-stun-grenade",   name: "Stun Grenade",       iconPath: "/gadgets/StunGrenade.webp"      },
+];
+
+// ─── Operator Gadgets ──────────────────────────────────────────────────────────
+// Operator-specific gadgets / deployable devices that only certain operators carry.
+
+export const OPERATOR_GADGETS: GadgetConfig[] = [
+  { id: "opgadget-azami",         name: "Kiba Barrier",        iconPath: "/gadgets/Azami.webp"         },
+  { id: "opgadget-bandit",        name: "Shock Wire",          iconPath: "/gadgets/Bandit.webp"        },
+  { id: "opgadget-echo",          name: "Yokai",               iconPath: "/gadgets/Echo.webp"          },
+  { id: "opgadget-ela",           name: "Grzmot Mine",         iconPath: "/gadgets/Ela.webp"           },
+  { id: "opgadget-fenrir",        name: "F-NATT Mine",         iconPath: "/gadgets/Fenrir.webp"        },
+  { id: "opgadget-frost",         name: "Welcome Mat",         iconPath: "/gadgets/Frost.webp"         },
+  { id: "opgadget-goyo",          name: "Volcan Shield",       iconPath: "/gadgets/Goyo.webp"          },
+  { id: "opgadget-grim",          name: "Hive Launcher",       iconPath: "/gadgets/Grim.webp"          },
+  { id: "opgadget-hard-breach",   name: "Hard Breach",         iconPath: "/gadgets/HardBreach.webp"    },
+  { id: "opgadget-jager",         name: "ADS",                 iconPath: "/gadgets/Jager.webp"         },
+  { id: "opgadget-kaid",          name: "Rtila Claw",          iconPath: "/gadgets/Kaid.webp"          },
+  { id: "opgadget-lesion",        name: "Gu Mine",             iconPath: "/gadgets/Lesion.webp"        },
+  { id: "opgadget-maestro",       name: "Evil Eye",            iconPath: "/gadgets/Maestro.webp"       },
+  { id: "opgadget-melusi",        name: "Banshee",             iconPath: "/gadgets/MelusiBanshee.webp" },
+  { id: "opgadget-mozzie",        name: "Pest",                iconPath: "/gadgets/Mozzie.webp"        },
+  { id: "opgadget-mute",          name: "Signal Disruptor",    iconPath: "/gadgets/Mute.webp"          },
+  { id: "opgadget-nomad",         name: "Airjab Mine",         iconPath: "/gadgets/Nomad.webp"         },
+  { id: "opgadget-thorn",         name: "Razorbloom",          iconPath: "/gadgets/Thorn.webp"         },
+  { id: "opgadget-thunderbird",   name: "Kóna Station",        iconPath: "/gadgets/Thunderbird.webp"   },
+  { id: "opgadget-toxic-canister",name: "Toxic Canister",      iconPath: "/gadgets/ToxicBabe.webp"     },
+  { id: "opgadget-tubarao",       name: "Zoto Canister",       iconPath: "/gadgets/Tubarao.webp"       },
+  { id: "opgadget-valkyrie",      name: "Black Eye",           iconPath: "/gadgets/Valkyrie.webp"      },
+  { id: "opgadget-wamai",         name: "Mag-NET",             iconPath: "/gadgets/Wamai.webp"         },
+  { id: "opgadget-zero",          name: "Argus Camera",        iconPath: "/gadgets/Zero.webp"          },
 ];

@@ -1,6 +1,7 @@
 import { Eye, EyeOff, Scaling, Play, Pause } from "lucide-react";
 import { useBoardStore } from "../store/useBoardStore";
 import type { Tool } from "../store/useBoardStore";
+import { cn } from "../utils/cn";
 
 const BRUSH_SWATCHES = [
   { label: "Orange", value: "#e85d2a" },
@@ -44,65 +45,58 @@ export default function TacticalPanel({ activeTool }: { activeTool: Tool }) {
 
   return (
     <div
-      className="absolute right-4 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5 w-12 z-50"
-      style={{
-        background: "var(--color-r6-surface-glass)",
-        border: "1px solid var(--color-r6-border)",
-        borderRadius: 14,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.15)",
-        backdropFilter: "blur(8px)",
-        padding: "12px 8px",
-      }}
+      className="absolute right-4 top-1/2 -translate-y-1/2 flex w-12 flex-col items-center gap-2 rounded-[14px] border border-r6-border bg-r6-surface-glass px-2 py-3 backdrop-blur-md z-50"
+      style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.15)" }}
     >
       {showRouteControls && (
         <>
           {/* Step selector 1–5 */}
-          <div className="flex flex-col gap-1.5 items-center">
+          <div className="flex flex-col gap-2 items-center">
             {([1, 2, 3, 4, 5] as const).map((step) => (
               <button
                 key={step}
                 onClick={() => setCurrentRouteStep(step)}
                 title={`Set waypoint at step ${step}`}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[13px] font-bold transition-colors"
-                style={{
-                  background: currentRouteStep === step ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-                  color:      currentRouteStep === step ? "var(--color-r6-accent)"     : "var(--color-r6-muted)",
-                  border:     currentRouteStep === step ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
-                }}
+                className={cn(
+                  "flex h-8 w-8 items-center justify-center rounded-lg text-[13px] font-bold transition-colors border",
+                  currentRouteStep === step
+                    ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
+                    : "bg-r6-surface-2 text-r6-muted border-r6-border"
+                )}
               >
                 {step}
               </button>
             ))}
           </div>
 
-          <div className="w-full" style={{ height: 1, background: "var(--color-r6-border)" }} />
+          <div className="w-full h-px bg-r6-border" />
 
           {/* Show full route toggle */}
           <button
             onClick={() => setShowFullRoute(!showFullRoute)}
             title={showFullRoute ? "Show up to current step only" : "Show full route"}
-            className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors mx-auto"
-            style={{
-              background: showFullRoute ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-              color:      showFullRoute ? "var(--color-r6-accent)"     : "var(--color-r6-muted)",
-              border:     showFullRoute ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
-            }}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg transition-colors mx-auto border",
+              showFullRoute
+                ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
+                : "bg-r6-surface-2 text-r6-muted border-r6-border"
+            )}
           >
             {showFullRoute ? <Eye size={14} /> : <EyeOff size={14} />}
           </button>
 
-          <div className="w-full" style={{ height: 1, background: "var(--color-r6-border)" }} />
+          <div className="w-full h-px bg-r6-border" />
 
           {/* Play/Pause presentation */}
           <button
             onClick={() => setIsPlaying(!isPlaying)}
             title={isPlaying ? "Pause (Space)" : "Play Strategy (Space)"}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-[12px] font-bold transition-colors"
-            style={{
-              background: isPlaying ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-              color:      isPlaying ? "var(--color-r6-accent)"     : "var(--color-r6-muted)",
-              border:     isPlaying ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
-            }}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-lg text-[12px] font-bold transition-colors border",
+              isPlaying
+                ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
+                : "bg-r6-surface-2 text-r6-muted border-r6-border"
+            )}
           >
             {isPlaying ? <Pause size={13} /> : <Play size={13} />}
           </button>
@@ -112,25 +106,27 @@ export default function TacticalPanel({ activeTool }: { activeTool: Tool }) {
       {showStyleControls && (
         <>
           {/* Color swatches */}
-          <div className="flex flex-col gap-1.5 items-center">
+          <div className="flex flex-col gap-2 items-center">
             {swatches.map(({ label, value }) => (
               <button
                 key={value}
                 title={label}
                 onClick={() => setStyle(value, activeSize)}
-                className="h-5 w-5 rounded-full transition-all"
+                className={cn(
+                  "h-5 w-5 rounded-full transition-all",
+                  activeColor === value
+                    ? "outline outline-2 outline-r6-accent outline-offset-2 scale-[1.18]"
+                    : "outline outline-2 outline-transparent"
+                )}
                 style={{
-                  background:   value,
-                  outline:      activeColor === value ? "2px solid var(--color-r6-accent)" : "2px solid transparent",
-                  outlineOffset: 2,
-                  border:       "1px solid rgba(255,255,255,0.15)",
-                  transform:    activeColor === value ? "scale(1.18)" : "scale(1)",
+                  background: value,
+                  border: "1px solid rgba(255,255,255,0.15)",
                 }}
               />
             ))}
           </div>
 
-          <div className="w-full" style={{ height: 1, background: "var(--color-r6-border)" }} />
+          <div className="w-full h-px bg-r6-border" />
 
           {/* Size preview dot */}
           <div
@@ -151,14 +147,12 @@ export default function TacticalPanel({ activeTool }: { activeTool: Tool }) {
             value={activeSize}
             onChange={(e) => setStyle(activeColor, Number(e.target.value))}
             title="Brush size"
+            className="cursor-pointer self-center accent-r6-accent"
             style={{
               writingMode: "vertical-lr",
               direction:   "rtl",
               height:      72,
               width:       20,
-              accentColor: "var(--color-r6-accent)",
-              cursor:      "pointer",
-              alignSelf:   "center",
             }}
           />
         </>
@@ -168,12 +162,11 @@ export default function TacticalPanel({ activeTool }: { activeTool: Tool }) {
       {showScaleControls && (
         <>
           {(showRouteControls || showStyleControls) && (
-            <div className="w-full" style={{ height: 1, background: "var(--color-r6-border)" }} />
+            <div className="w-full h-px bg-r6-border" />
           )}
           <Scaling
             size={13}
-            className="mx-auto"
-            style={{ color: "var(--color-r6-accent)", opacity: 0.8 }}
+            className="mx-auto text-r6-accent opacity-80"
           />
           <input
             type="range"
@@ -183,14 +176,12 @@ export default function TacticalPanel({ activeTool }: { activeTool: Tool }) {
             value={resizingItem!.scale}
             onChange={(e) => updateItem(resizingItem!.id, { scale: parseFloat(e.target.value) })}
             title="Token size"
+            className="cursor-pointer self-center accent-r6-accent"
             style={{
               writingMode: "vertical-lr",
               direction:   "rtl",
               height:      72,
               width:       20,
-              accentColor: "var(--color-r6-accent)",
-              cursor:      "pointer",
-              alignSelf:   "center",
             }}
           />
         </>

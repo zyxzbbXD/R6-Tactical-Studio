@@ -19,6 +19,9 @@ interface SettingsState {
   isSettingsOpen: boolean;
   isImportModalOpen: boolean;
 
+  // Advanced mode — unlocks power-user tools (e.g. custom room labels)
+  isAdvancedMode: boolean;
+
   // Actions
   setApiKey: (key: string) => void;
   setBaseUrl: (url: string) => void;
@@ -31,6 +34,7 @@ interface SettingsState {
   closeSettings: () => void;
   openImportModal: () => void;
   closeImportModal: () => void;
+  setAdvancedMode: (v: boolean) => void;
 }
 
 // ─── Store ─────────────────────────────────────────────────────────────────────
@@ -47,6 +51,7 @@ export const useSettingsStore = create<SettingsState>()(
       rightSidebarTab: "ai",
       isSettingsOpen: false,
       isImportModalOpen: false,
+      isAdvancedMode: false,
 
       setApiKey: (key) => set({ apiKey: key }),
       setBaseUrl: (url) => set({ baseUrl: url }),
@@ -59,6 +64,7 @@ export const useSettingsStore = create<SettingsState>()(
       closeSettings: () => set({ isSettingsOpen: false }),
       openImportModal: () => set({ isImportModalOpen: true }),
       closeImportModal: () => set({ isImportModalOpen: false }),
+      setAdvancedMode: (v) => set({ isAdvancedMode: v }),
     }),
     {
       name: "r6-settings",
@@ -69,6 +75,7 @@ export const useSettingsStore = create<SettingsState>()(
         theme: s.theme,
         language: s.language,
         isRightSidebarOpen: s.isRightSidebarOpen,
+        isAdvancedMode: s.isAdvancedMode,
       }),
     }
   )

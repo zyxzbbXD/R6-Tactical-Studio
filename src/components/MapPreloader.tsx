@@ -24,7 +24,7 @@ export default function MapPreloader({ currentMap }: { currentMap: MapConfig | n
   }
 
   return (
-    <div style={{ display: "none" }} aria-hidden="true">
+    <div className="hidden" aria-hidden="true">
       {urls.map((url) => (
         <img key={url} src={url} alt="" />
       ))}

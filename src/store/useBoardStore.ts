@@ -11,7 +11,8 @@ export type Tool =
   | "place_operator"
   | "throwable"
   | "route"
-  | "text";
+  | "text"
+  | "room_name";
 
 export interface VideoMarker {
   time: number;   // seconds into the video
@@ -35,6 +36,21 @@ export interface TextNode {
   scaleX: number;
   scaleY: number;
   phase: number;
+  floorId: string | null;
+}
+
+// Room labels are floor-scoped only (not phase-scoped) — they represent static
+// map annotations like room names that don't change between phases.
+export interface RoomLabel {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  fontSize: number;
+  fill: string;
+  rotation: number;
+  scaleX: number;
+  scaleY: number;
   floorId: string | null;
 }
 
@@ -87,6 +103,9 @@ type HistoryEntry =
   | { type: "addText";             id: string;                                                                      phase: number; floorId: string | null }
   | { type: "updateText";          id: string; prevNode: TextNode;                                                  phase: number; floorId: string | null }
   | { type: "removeText";          node: TextNode;                                                                  phase: number; floorId: string | null }
+  | { type: "addRoomLabel";        id: string;                                                                      phase: number; floorId: string | null }
+  | { type: "updateRoomLabel";     id: string; prevLabel: RoomLabel;                                                phase: number; floorId: string | null }
+  | { type: "removeRoomLabel";     label: RoomLabel;                                                                phase: number; floorId: string | null }
   | { type: "setRouteStepStatus";  itemId: string; prevRoute: Record<number, Waypoint>;                             phase: number; floorId: string | null }
   | { type: "clearRoute";          itemId: string; prevRoute: Record<number, Waypoint>;                             phase: number; floorId: string | null };
 
@@ -125,6 +144,9 @@ interface BoardState {
   // Text annotations on canvas
   texts: TextNode[];
 
+  // Room labels — floor-scoped only (phase-independent static map annotations)
+  roomLabels: RoomLabel[];
+
   // Presentation playback
   isPlaying: boolean;
 
@@ -161,6 +183,10 @@ interface BoardState {
   addText: (node: Omit<TextNode, "phase" | "floorId">) => void;
   updateText: (id: string, updates: Partial<TextNode>) => void;
   removeText: (id: string) => void;
+  addRoomLabel: (label: Omit<RoomLabel, "floorId">) => void;
+  updateRoomLabel: (id: string, updates: Partial<RoomLabel>) => void;
+  removeRoomLabel: (id: string) => void;
+  setRoomLabelsForFloor: (floorId: string, labels: RoomLabel[]) => void;
   setRouteStepStatus: (itemId: string, step: 1 | 2 | 3 | 4 | 5, status: "normal" | "dead" | "planting") => void;
   addItem: (item: Omit<BoardItem, "phase" | "route" | "scale" | "floorId">) => void;
   updateItem: (id: string, updates: Partial<BoardItem>) => void;
@@ -208,6 +234,7 @@ export const useBoardStore = create<BoardState>((set) => ({
   videoMarkers: [],
   currentPhase: 1,
   texts: [],
+  roomLabels: [],
   isPlaying: false,
   resizingItemId: null,
   transformingItemId: null,
@@ -260,6 +287,45 @@ export const useBoardStore = create<BoardState>((set) => ({
         _history: [...s._history, { type: "removeText", node, phase: s.currentPhase, floorId: node.floorId }],
       };
     }),
+
+  addRoomLabel: (label) =>
+    set((s) => {
+      const floorId = useCanvasStore.getState().currentFloorId;
+      const newLabel: RoomLabel = { ...label, floorId };
+      return {
+        roomLabels: [...s.roomLabels, newLabel],
+        _history: [...s._history, { type: "addRoomLabel", id: label.id, phase: s.currentPhase, floorId }],
+      };
+    }),
+
+  updateRoomLabel: (id, updates) =>
+    set((s) => {
+      const prev = s.roomLabels.find((rl) => rl.id === id);
+      if (!prev) return { roomLabels: s.roomLabels };
+      return {
+        roomLabels: s.roomLabels.map((rl) => (rl.id === id ? { ...rl, ...updates } : rl)),
+        _history: [...s._history, { type: "updateRoomLabel", id, prevLabel: prev, phase: s.currentPhase, floorId: prev.floorId }],
+      };
+    }),
+
+  removeRoomLabel: (id) =>
+    set((s) => {
+      const label = s.roomLabels.find((rl) => rl.id === id);
+      if (!label) return { roomLabels: s.roomLabels };
+      return {
+        roomLabels: s.roomLabels.filter((rl) => rl.id !== id),
+        _history: [...s._history, { type: "removeRoomLabel", label, phase: s.currentPhase, floorId: label.floorId }],
+      };
+    }),
+
+  setRoomLabelsForFloor: (floorId, labels) =>
+    set((s) => ({
+      roomLabels: [
+        ...s.roomLabels.filter((rl) => rl.floorId !== floorId),
+        ...labels,
+      ],
+    })),
+
   setRouteStepStatus: (itemId, step, status) =>
     set((s) => {
       const item = s.items.find((i) => i.id === itemId);
@@ -416,6 +482,12 @@ export const useBoardStore = create<BoardState>((set) => ({
           return { _history: newHistory, texts: s.texts.map((t) => (t.id === entry.id ? entry.prevNode : t)) };
         case "removeText":
           return { _history: newHistory, texts: [...s.texts, entry.node] };
+        case "addRoomLabel":
+          return { _history: newHistory, roomLabels: s.roomLabels.filter((rl) => rl.id !== entry.id) };
+        case "updateRoomLabel":
+          return { _history: newHistory, roomLabels: s.roomLabels.map((rl) => (rl.id === entry.id ? entry.prevLabel : rl)) };
+        case "removeRoomLabel":
+          return { _history: newHistory, roomLabels: [...s.roomLabels, entry.label] };
         case "setRouteStepStatus":
           return {
             _history: newHistory,
@@ -443,6 +515,7 @@ export const useBoardStore = create<BoardState>((set) => ({
       lines:          Array.isArray(d.lines)          ? (d.lines          as DrawnLine[])    : [],
       throwableLines: Array.isArray(d.throwableLines) ? (d.throwableLines as ThrowableLine[]) : [],
       texts:          Array.isArray(d.texts)          ? (d.texts          as TextNode[])     : [],
+      roomLabels:     Array.isArray(d.roomLabels)     ? (d.roomLabels     as RoomLabel[])    : [],
       notes:          typeof d.notes === "string"     ? d.notes                              : "",
       _history: [],
     });
@@ -456,13 +529,15 @@ export const useBoardStore = create<BoardState>((set) => ({
     }
   },
 
-  clearAll: () => set({ items: [], lines: [], throwableLines: [], texts: [], _history: [] }),
-  clearBoard: () => set({ items: [], lines: [], throwableLines: [], texts: [], notes: "", _history: [] }),
+  clearAll: () => set({ items: [], lines: [], throwableLines: [], texts: [], roomLabels: [], _history: [] }),
+  clearBoard: () => set({ items: [], lines: [], throwableLines: [], texts: [], roomLabels: [], notes: "", _history: [] }),
   clearFloor: (phase, floorId) => set((s) => ({
     items:          s.items.filter((i) => !(i.phase === phase && i.floorId === floorId)),
     lines:          s.lines.filter((l) => !(l.phase === phase && l.floorId === floorId)),
     throwableLines: s.throwableLines.filter((l) => !(l.phase === phase && l.floorId === floorId)),
     texts:          s.texts.filter((t) => !(t.phase === phase && t.floorId === floorId)),
+    // Room labels are floor-scoped only — clear all for this floor regardless of phase
+    roomLabels:     s.roomLabels.filter((rl) => rl.floorId !== floorId),
     _history: [],
   })),
 

@@ -3,6 +3,7 @@ import { X, Upload, ChevronDown, Image as ImageIcon } from "lucide-react";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useCanvasStore } from "../store/canvasStore";
 import { t } from "../locales/i18n";
+import { cn } from "../utils/cn";
 import type { FloorImages } from "../config/assets";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -39,21 +40,13 @@ function StyledSelect({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full appearance-none rounded-xl px-3.5 py-2.5 text-[14px] outline-none pr-8"
-        style={{
-          background: "var(--color-r6-surface-2)",
-          border:     "1px solid var(--color-r6-border)",
-          color:      "var(--color-r6-text)",
-        }}
-        onFocus={(e) => (e.currentTarget.style.borderColor = "var(--color-r6-accent)")}
-        onBlur={(e)  => (e.currentTarget.style.borderColor = "var(--color-r6-border)")}
+        className="w-full appearance-none rounded-xl px-3.5 py-2.5 text-[14px] outline-none pr-8 bg-r6-surface-2 border border-r6-border text-r6-text focus:border-r6-accent"
       >
         {children}
       </select>
       <ChevronDown
         size={13}
-        className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
-        style={{ color: "var(--color-r6-muted)" }}
+        className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-r6-muted"
       />
     </div>
   );
@@ -151,45 +144,32 @@ export default function ImportMapModal() {
   return (
     /* Backdrop */
     <div
-      className="fixed inset-0 flex items-center justify-center"
-      style={{ zIndex: 10000, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
+      className="fixed inset-0 flex items-center justify-center backdrop-blur-sm"
+      style={{ zIndex: 10000, background: "rgba(0,0,0,0.6)" }}
       onClick={handleClose}
     >
       {/* Modal panel */}
       <div
-        className="flex w-[520px] flex-col rounded-2xl overflow-hidden"
-        style={{
-          background:  "var(--color-r6-surface)",
-          border:      "1px solid var(--color-r6-border)",
-          boxShadow:   "0 32px 80px rgba(0,0,0,0.8)",
-        }}
+        className="flex w-[520px] flex-col rounded-2xl overflow-hidden bg-r6-surface border border-r6-border"
+        style={{ boxShadow: "0 32px 80px rgba(0,0,0,0.8)" }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div
-          className="flex items-center gap-3 px-6 py-5"
-          style={{ borderBottom: "1px solid var(--color-r6-border)" }}
-        >
-          <div
-            className="flex h-10 w-10 items-center justify-center rounded-xl"
-            style={{ background: "var(--color-r6-accent-dim)", border: "1px solid var(--color-r6-accent)" }}
-          >
-            <Upload size={18} style={{ color: "var(--color-r6-accent)" }} />
+        <div className="flex items-center gap-3 px-6 py-5 border-b border-r6-border">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-r6-accent-dim border border-r6-accent">
+            <Upload size={18} className="text-r6-accent" />
           </div>
           <div className="flex-1">
-            <p className="text-[16px] font-semibold" style={{ color: "var(--color-r6-text)" }}>
+            <p className="text-[16px] font-semibold text-r6-text">
               {t("import_map_title", language)}
             </p>
-            <p className="text-[13px]" style={{ color: "var(--color-r6-muted)" }}>
+            <p className="text-[13px] text-r6-muted">
               {t("import_map_sub", language)}
             </p>
           </div>
           <button
             onClick={handleClose}
-            className="flex h-9 w-9 items-center justify-center rounded-xl transition-colors"
-            style={{ color: "var(--color-r6-muted)" }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--color-r6-surface-3)"; e.currentTarget.style.color = "var(--color-r6-text)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--color-r6-muted)"; }}
+            className="flex h-9 w-9 items-center justify-center rounded-xl transition-colors text-r6-muted hover:bg-r6-surface-3 hover:text-r6-text"
           >
             <X size={17} />
           </button>
@@ -200,13 +180,11 @@ export default function ImportMapModal() {
 
           {/* Drop zone */}
           <div
-            className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed cursor-pointer overflow-hidden"
-            style={{
-              minHeight:   140,
-              borderColor: isDragging ? "var(--color-r6-accent)" : "var(--color-r6-border)",
-              background:  isDragging ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-              transition:  "border-color 0.15s ease, background 0.15s ease",
-            }}
+            className={cn(
+              "flex flex-col items-center justify-center rounded-xl border-2 border-dashed cursor-pointer overflow-hidden transition-[border-color,background] duration-150",
+              isDragging ? "border-r6-accent bg-r6-accent-dim" : "border-r6-border bg-r6-surface-2"
+            )}
+            style={{ minHeight: 140 }}
             onDragEnter={(e) => { e.preventDefault(); setIsDragging(true); }}
             onDragOver={(e)  => { e.preventDefault(); setIsDragging(true); }}
             onDragLeave={() => setIsDragging(false)}
@@ -228,11 +206,11 @@ export default function ImportMapModal() {
               />
             ) : (
               <div className="flex flex-col items-center gap-2 py-6">
-                <ImageIcon size={28} style={{ color: "var(--color-r6-muted-2)" }} />
-                <p className="text-[13px] font-medium" style={{ color: "var(--color-r6-muted)" }}>
+                <ImageIcon size={28} className="text-r6-muted-2" />
+                <p className="text-[13px] font-medium text-r6-muted">
                   {t("drag_drop_image", language)}
                 </p>
-                <p className="text-[12px]" style={{ color: "var(--color-r6-muted-2)" }}>
+                <p className="text-[12px] text-r6-muted-2">
                   {t("or_click_upload", language)}
                 </p>
               </div>
@@ -241,7 +219,7 @@ export default function ImportMapModal() {
 
           {/* Map Name */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-[14px] font-medium" style={{ color: "var(--color-r6-text)" }}>
+            <label className="text-[14px] font-medium text-r6-text">
               {t("map_name", language)}
             </label>
             <input
@@ -250,15 +228,7 @@ export default function ImportMapModal() {
               onChange={(e) => setMapName(e.target.value)}
               placeholder={t("map_name_ph", language)}
               spellCheck={false}
-              className="w-full rounded-xl px-3.5 py-2.5 text-[14px] outline-none"
-              style={{
-                background:  "var(--color-r6-surface-2)",
-                border:      "1px solid var(--color-r6-border)",
-                color:       "var(--color-r6-text)",
-                caretColor:  "var(--color-r6-accent)",
-              }}
-              onFocus={(e) => (e.currentTarget.style.borderColor = "var(--color-r6-accent)")}
-              onBlur={(e)  => (e.currentTarget.style.borderColor = "var(--color-r6-border)")}
+              className="w-full rounded-xl px-3.5 py-2.5 text-[14px] outline-none bg-r6-surface-2 border border-r6-border text-r6-text caret-r6-accent focus:border-r6-accent"
               onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
             />
           </div>
@@ -267,7 +237,7 @@ export default function ImportMapModal() {
           <div className="flex gap-4">
             {/* Floor */}
             <div className="flex flex-col gap-1.5 flex-1">
-              <label className="text-[14px] font-medium" style={{ color: "var(--color-r6-text)" }}>
+              <label className="text-[14px] font-medium text-r6-text">
                 {t("floor_level", language)}
               </label>
               <StyledSelect value={floorId} onChange={setFloorId}>
@@ -283,22 +253,14 @@ export default function ImportMapModal() {
                   onChange={(e) => setCustomFloor(e.target.value)}
                   placeholder={t("floor_custom_ph", language)}
                   spellCheck={false}
-                  className="w-full rounded-xl px-3.5 py-2 text-[13px] outline-none"
-                  style={{
-                    background:  "var(--color-r6-surface-2)",
-                    border:      "1px solid var(--color-r6-border)",
-                    color:       "var(--color-r6-text)",
-                    caretColor:  "var(--color-r6-accent)",
-                  }}
-                  onFocus={(e) => (e.currentTarget.style.borderColor = "var(--color-r6-accent)")}
-                  onBlur={(e)  => (e.currentTarget.style.borderColor = "var(--color-r6-border)")}
+                  className="w-full rounded-xl px-3.5 py-2 text-[13px] outline-none bg-r6-surface-2 border border-r6-border text-r6-text caret-r6-accent focus:border-r6-accent"
                 />
               )}
             </div>
 
             {/* Image Type */}
             <div className="flex flex-col gap-1.5 flex-1">
-              <label className="text-[14px] font-medium" style={{ color: "var(--color-r6-text)" }}>
+              <label className="text-[14px] font-medium text-r6-text">
                 {t("image_type", language)}
               </label>
               <StyledSelect value={imageType} onChange={(v) => setImageType(v as ImageType)}>
@@ -311,34 +273,21 @@ export default function ImportMapModal() {
 
           {/* Error message */}
           {error && (
-            <p className="text-[13px]" style={{ color: "#ef4444" }}>{error}</p>
+            <p className="text-[13px] text-red-500">{error}</p>
           )}
         </div>
 
         {/* Footer */}
-        <div
-          className="flex items-center justify-end gap-3 px-6 py-4"
-          style={{ borderTop: "1px solid var(--color-r6-border)", background: "var(--color-r6-surface-2)" }}
-        >
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-r6-border bg-r6-surface-2">
           <button
             onClick={handleClose}
-            className="rounded-xl px-5 py-2.5 text-[14px] font-medium"
-            style={{
-              background: "var(--color-r6-surface-3)",
-              color:      "var(--color-r6-muted)",
-              border:     "1px solid var(--color-r6-border)",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--color-r6-text)")}
-            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--color-r6-muted)")}
+            className="rounded-xl px-5 py-2.5 text-[14px] font-medium bg-r6-surface-3 text-r6-muted border border-r6-border hover:text-r6-text"
           >
             {t("Done", language)}
           </button>
           <button
             onClick={handleSubmit}
-            className="rounded-xl px-6 py-2.5 text-[14px] font-medium transition-opacity"
-            style={{ background: "var(--color-r6-accent)", color: "#fff" }}
-            onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
-            onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+            className="rounded-xl px-6 py-2.5 text-[14px] font-medium transition-opacity bg-r6-accent text-white hover:opacity-85"
           >
             {t("btn_import", language)}
           </button>

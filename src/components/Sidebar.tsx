@@ -16,13 +16,15 @@ import {
   Check,
   X,
   Wrench,
+  Package,
 } from "lucide-react";
-import { ATK_OPERATORS, DEF_OPERATORS, GADGETS, MAPS, type GadgetConfig, type OperatorConfig } from "../config/assets";
+import { ATK_OPERATORS, DEF_OPERATORS, GADGETS, OPERATOR_GADGETS, MAPS, type GadgetConfig, type OperatorConfig } from "../config/assets";
 import { dragState } from "../store/dragState";
 import { useBoardStore } from "../store/useBoardStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useProjectStore } from "../store/useProjectStore";
 import { t } from "../locales/i18n";
+import { cn } from "../utils/cn";
 import type { ProjectMeta } from "../utils/projectManager";
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
@@ -41,10 +43,7 @@ function SectionHeader({
   return (
     <button
       onClick={onToggle}
-      className="flex w-full items-center gap-2 px-3 py-2 transition-colors"
-      style={{ color: "var(--color-r6-muted)" }}
-      onMouseEnter={(e) => (e.currentTarget.style.color = "var(--color-r6-text)")}
-      onMouseLeave={(e) => (e.currentTarget.style.color = "var(--color-r6-muted)")}
+      className="flex w-full items-center gap-2 px-3 py-2 transition-colors text-r6-muted hover:text-r6-text"
     >
       <Icon size={14} className="shrink-0" />
       <span className="flex-1 text-left text-sm font-bold tracking-wide uppercase truncate whitespace-nowrap">{label}</span>
@@ -73,10 +72,7 @@ function AssetGrid({
         <div
           key={op.id}
           title={op.name}
-          className="flex flex-col items-center gap-0.5 rounded-lg p-1 cursor-grab transition-colors"
-          style={{ background: "var(--color-r6-surface-2)" }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-3)")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
+          className="flex flex-col items-center gap-0.5 rounded-lg p-1 cursor-grab transition-colors bg-r6-surface-2 hover:bg-r6-surface-3"
           draggable
           onClick={() => {
             const side = "side" in op ? (op.side as "atk" | "def") : "neutral";
@@ -97,13 +93,7 @@ function AssetGrid({
           data-operator-id={op.id}
           data-operator-side={"side" in op ? op.side : undefined}
         >
-          <div
-            className="w-full aspect-square flex items-center justify-center overflow-hidden rounded-full"
-            style={{
-              background: "var(--color-r6-surface-3)",
-              border: "1px solid var(--color-r6-border)",
-            }}
-          >
+          <div className="w-full aspect-square flex items-center justify-center overflow-hidden rounded-full bg-r6-surface-3 border border-r6-border">
             <img
               src={op.iconPath}
               alt={op.name}
@@ -111,10 +101,7 @@ function AssetGrid({
               draggable={false}
             />
           </div>
-          <span
-            className="truncate w-full text-center text-[11px] font-medium leading-tight mt-0.5"
-            style={{ color: "var(--color-r6-text)" }}
-          >
+          <span className="truncate w-full text-center text-[11px] font-medium leading-tight mt-0.5 text-r6-text">
             {op.name}
           </span>
         </div>
@@ -135,6 +122,7 @@ export default function Sidebar({
   const [projectsOpen,   setProjectsOpen]   = useState(true);
   const [assetsOpen,     setAssetsOpen]     = useState(true);
   const [gadgetsOpen,    setGadgetsOpen]    = useState(true);
+  const [opGadgetsOpen,  setOpGadgetsOpen]  = useState(true);
   const [activeAssetTab, setActiveAssetTab] = useState<"atk" | "def">("atk");
   const openSettings    = useSettingsStore((s) => s.openSettings);
   const openImportModal = useSettingsStore((s) => s.openImportModal);
@@ -209,51 +197,36 @@ export default function Sidebar({
 
   return (
     <aside
-      className="h-full shrink-0"
+      className="h-full shrink-0 overflow-hidden"
       style={{
         width,
-        overflow: "hidden",
         transition,
         opacity: width === 0 ? 0 : 1,
-        flexShrink: 0,
       }}
     >
     {/* Inner div keeps the stable (non-zero) width so the icon grid never reflows
         during the collapse slide — the outer <aside> clips it like a viewport. */}
     <div
-      className="flex h-full flex-col"
-      style={{
-        width: stableWidthRef.current,
-        background: "var(--color-r6-surface)",
-        borderRight: "1px solid var(--color-r6-border)",
-      }}
+      className="flex h-full flex-col bg-r6-surface border-r border-r6-border"
+      style={{ width: stableWidthRef.current }}
     >
       {/* ── Logo / App name ── */}
-      <div
-        className="flex items-center gap-2 px-4 py-3 shrink-0"
-        style={{ borderBottom: "1px solid var(--color-r6-border)" }}
-      >
-        <div
-          className="flex h-8 w-8 items-center justify-center rounded-lg"
-          style={{ background: "var(--color-r6-accent)", color: "#fff" }}
-        >
+      <div className="flex items-center gap-2 px-4 py-3 shrink-0 border-b border-r6-border">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-r6-accent text-white">
           <Crosshair size={17} strokeWidth={2.5} />
         </div>
         <div>
-          <div className="text-[15px] font-semibold leading-tight" style={{ color: "var(--color-r6-text)" }}>
+          <div className="text-[15px] font-semibold leading-tight text-r6-text">
             R6 Tactical
           </div>
-          <div className="text-[12px]" style={{ color: "var(--color-r6-muted)" }}>
+          <div className="text-[12px] text-r6-muted">
             Studio
           </div>
         </div>
         <button
-          className="ml-auto rounded-lg p-1.5 transition-colors"
+          className="ml-auto rounded-lg p-1.5 transition-colors text-r6-muted hover:text-r6-text"
           title={t("Settings", language)}
-          style={{ color: "var(--color-r6-muted)" }}
           onClick={openSettings}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "var(--color-r6-text)")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "var(--color-r6-muted)")}
         >
           <Settings size={17} />
         </button>
@@ -263,7 +236,7 @@ export default function Sidebar({
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
 
         {/* Projects Section */}
-        <div style={{ borderBottom: "1px solid var(--color-r6-border)" }}>
+        <div className="border-b border-r6-border">
           <SectionHeader
             label={t("Projects", language)}
             icon={Layers}
@@ -273,7 +246,7 @@ export default function Sidebar({
           {projectsOpen && (
             <div className="pb-2">
               {grouped.length === 0 && (
-                <p className="px-3 py-2 text-[13px]" style={{ color: "var(--color-r6-muted-2)" }}>
+                <p className="px-3 py-2 text-[13px] text-r6-muted-2">
                   {t("No projects yet", language)}
                 </p>
               )}
@@ -281,10 +254,7 @@ export default function Sidebar({
               {grouped.map((group) => (
                 <div key={group.id}>
                   {/* Map group header */}
-                  <div
-                    className="flex items-center gap-1.5 px-3 pt-2 pb-0.5 text-[12px] font-semibold uppercase tracking-wider"
-                    style={{ color: "var(--color-r6-muted-2)" }}
-                  >
+                  <div className="flex items-center gap-1.5 px-3 pt-1.5 pb-0.5 text-[13px] font-semibold uppercase tracking-wider text-r6-muted-2">
                     <MapIcon size={12} />
                     <span>{(() => { const tk = `map_${group.id}`; const tv = t(tk, language); return tv !== tk ? tv : group.label; })()}</span>
                   </div>
@@ -295,31 +265,18 @@ export default function Sidebar({
                     return (
                       <div
                         key={proj.id}
-                        className="group flex items-center gap-1 pr-1"
-                        style={{
-                          background: isActive ? "var(--color-r6-accent-dim)" : "transparent",
-                        }}
+                        className={cn("group flex items-center gap-1 pr-1", isActive ? "bg-r6-accent-dim" : "bg-transparent")}
                       >
                         <button
                           onClick={() => loadProject(proj.id)}
-                          className="flex flex-1 items-center gap-1.5 py-1.5 pl-6 text-[13px] rounded-l truncate"
-                          style={{
-                            color: isActive ? "var(--color-r6-accent)" : "var(--color-r6-muted)",
-                          }}
-                          onMouseEnter={(e) => {
-                            if (!isActive) {
-                              e.currentTarget.style.background = "var(--color-r6-surface-2)";
-                              e.currentTarget.style.color = "var(--color-r6-text)";
-                            }
-                          }}
-                          onMouseLeave={(e) => {
-                            if (!isActive) {
-                              e.currentTarget.style.background = "transparent";
-                              e.currentTarget.style.color = "var(--color-r6-muted)";
-                            }
-                          }}
+                          className={cn(
+                            "flex flex-1 items-center gap-1.5 py-1 pl-6 text-[14px] rounded-l truncate",
+                            isActive
+                              ? "text-r6-accent"
+                              : "text-r6-muted hover:bg-r6-surface-2 hover:text-r6-text"
+                          )}
                         >
-                          <FileText size={13} className="shrink-0" style={{ opacity: 0.6 }} />
+                          <FileText size={13} className="shrink-0 opacity-60" />
                           <span className="truncate">{proj.name}</span>
                         </button>
 
@@ -327,10 +284,7 @@ export default function Sidebar({
                         <button
                           title="Delete project"
                           onClick={() => deleteProject(proj.id)}
-                          className="shrink-0 rounded-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                          style={{ color: "var(--color-r6-muted-2)" }}
-                          onMouseEnter={(e) => (e.currentTarget.style.color = "#ef4444")}
-                          onMouseLeave={(e) => (e.currentTarget.style.color = "var(--color-r6-muted-2)")}
+                          className="shrink-0 rounded-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity text-r6-muted-2 hover:text-red-500"
                         >
                           <Trash2 size={13} />
                         </button>
@@ -352,26 +306,19 @@ export default function Sidebar({
                       if (e.key === "Escape") cancelNewProject();
                     }}
                     placeholder="Project name…"
-                    className="flex-1 rounded-lg px-2 py-1 text-[13px] outline-none"
-                    style={{
-                      background: "var(--color-r6-surface-2)",
-                      border: "1px solid var(--color-r6-accent)",
-                      color: "var(--color-r6-text)",
-                    }}
+                    className="flex-1 rounded-lg px-2 py-1 text-[13px] outline-none bg-r6-surface-2 border border-r6-accent text-r6-text"
                   />
                   <button
                     onClick={confirmNewProject}
                     title="Create"
-                    className="rounded-lg p-0.5"
-                    style={{ color: "var(--color-r6-accent)" }}
+                    className="rounded-lg p-0.5 text-r6-accent"
                   >
                     <Check size={15} />
                   </button>
                   <button
                     onClick={cancelNewProject}
                     title="Cancel"
-                    className="rounded-lg p-0.5"
-                    style={{ color: "var(--color-r6-muted)" }}
+                    className="rounded-lg p-0.5 text-r6-muted"
                   >
                     <X size={15} />
                   </button>
@@ -380,16 +327,7 @@ export default function Sidebar({
                 <>
                   <button
                     onClick={openNewProject}
-                    className="mt-1 flex w-full items-center gap-2 px-3 py-1.5 text-[13px] rounded-lg transition-colors"
-                    style={{ color: "var(--color-r6-muted)" }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.color = "var(--color-r6-accent)";
-                      e.currentTarget.style.background = "var(--color-r6-accent-dim)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.color = "var(--color-r6-muted)";
-                      e.currentTarget.style.background = "transparent";
-                    }}
+                    className="mt-0.5 flex w-full items-center gap-2 px-3 py-1 text-[13px] rounded-lg transition-colors text-r6-muted hover:text-r6-accent hover:bg-r6-accent-dim"
                   >
                     <FolderPlus size={14} />
                     <span>{t("New Project", language)}</span>
@@ -403,16 +341,7 @@ export default function Sidebar({
                   />
                   <button
                     onClick={() => loadFileRef.current?.click()}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-[13px] rounded-lg transition-colors"
-                    style={{ color: "var(--color-r6-muted)" }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.color = "var(--color-r6-accent)";
-                      e.currentTarget.style.background = "var(--color-r6-accent-dim)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.color = "var(--color-r6-muted)";
-                      e.currentTarget.style.background = "transparent";
-                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1 text-[13px] rounded-lg transition-colors text-r6-muted hover:text-r6-accent hover:bg-r6-accent-dim"
                   >
                     <FolderOpen size={14} />
                     <span>{t("load_project", language)}</span>
@@ -424,7 +353,7 @@ export default function Sidebar({
         </div>
 
         {/* Asset Library Section */}
-        <div style={{ borderBottom: "1px solid var(--color-r6-border)" }}>
+        <div className="border-b border-r6-border">
           <SectionHeader
             label={t("Asset Library", language)}
             icon={Users}
@@ -434,20 +363,17 @@ export default function Sidebar({
           {assetsOpen && (
             <div>
               {/* Tab strip */}
-              <div
-                className="flex mx-3 mb-2 rounded-lg overflow-hidden"
-                style={{ background: "var(--color-r6-surface-2)" }}
-              >
+              <div className="flex mx-3 mb-2 rounded-lg overflow-hidden bg-r6-surface-2">
                 {(["atk", "def"] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setActiveAssetTab(tab)}
-                    className="flex-1 py-1.5 text-xs font-bold tracking-wider uppercase transition-colors"
-                    style={{
-                      background: activeAssetTab === tab ? "var(--color-r6-surface-3)" : "transparent",
-                      color: activeAssetTab === tab ? "var(--color-r6-text)" : "var(--color-r6-muted)",
-                      borderBottom: activeAssetTab === tab ? "1px solid var(--color-r6-accent)" : "1px solid transparent",
-                    }}
+                    className={cn(
+                      "flex-1 py-1.5 text-xs font-bold tracking-wider uppercase transition-colors border-b",
+                      activeAssetTab === tab
+                        ? "bg-r6-surface-3 text-r6-text border-r6-accent"
+                        : "bg-transparent text-r6-muted border-transparent"
+                    )}
                   >
                     {tab === "atk" ? (
                       <span className="flex items-center justify-center gap-1 whitespace-nowrap">
@@ -467,7 +393,7 @@ export default function Sidebar({
         </div>
 
         {/* Gadgets Section */}
-        <div>
+        <div className="border-b border-r6-border">
           <SectionHeader
             label={t("sidebar_gadgets", language)}
             icon={Wrench}
@@ -476,31 +402,24 @@ export default function Sidebar({
           />
           {gadgetsOpen && <AssetGrid items={GADGETS} containerWidth={width} />}
         </div>
+
+        {/* Operator Gadgets Section */}
+        <div>
+          <SectionHeader
+            label={t("sidebar_op_gadgets", language)}
+            icon={Package}
+            open={opGadgetsOpen}
+            onToggle={() => setOpGadgetsOpen(!opGadgetsOpen)}
+          />
+          {opGadgetsOpen && <AssetGrid items={OPERATOR_GADGETS} containerWidth={width} />}
+        </div>
       </div>
 
       {/* ── Bottom toolbar ── */}
-      <div
-        className="flex shrink-0 flex-col gap-1 p-2"
-        style={{ borderTop: "1px solid var(--color-r6-border)" }}
-      >
+      <div className="flex shrink-0 flex-col gap-1 p-2 border-t border-r6-border">
         <button
           onClick={openImportModal}
-          className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-[13px] font-medium transition-colors"
-          style={{
-            background: "var(--color-r6-surface-2)",
-            color: "var(--color-r6-muted)",
-            border: "1px dashed var(--color-r6-border)",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--color-r6-accent-dim)";
-            e.currentTarget.style.color = "var(--color-r6-accent)";
-            e.currentTarget.style.borderColor = "var(--color-r6-accent)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "var(--color-r6-surface-2)";
-            e.currentTarget.style.color = "var(--color-r6-muted)";
-            e.currentTarget.style.borderColor = "var(--color-r6-border)";
-          }}
+          className="flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-[13px] font-medium transition-colors bg-r6-surface-2 text-r6-muted border border-dashed border-r6-border hover:bg-r6-accent-dim hover:text-r6-accent hover:border-r6-accent"
         >
           <Upload size={14} />
           {t("Import Custom Map", language)}

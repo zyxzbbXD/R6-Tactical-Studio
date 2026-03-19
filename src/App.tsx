@@ -8,6 +8,7 @@ import ImportMapModal from "./components/ImportMapModal";
 import { useSettingsStore } from "./store/useSettingsStore";
 import { useResizable } from "./hooks/useResizable";
 import { useBoardStore } from "./store/useBoardStore";
+import { cn } from "./utils/cn";
 
 // ── Root font-size scaling ───────────────────────────────────────────────────
 
@@ -96,8 +97,7 @@ function App() {
 
   return (
     <div
-      className="flex h-full w-full overflow-hidden"
-      style={{ background: "var(--color-r6-bg)" }}
+      className="flex h-full w-full overflow-hidden bg-r6-bg"
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleGlobalDrop}
     >
@@ -110,25 +110,16 @@ function App() {
       {/* Left resize handle — only when open */}
       {isLeftOpen && (
         <div
-          className="flex-shrink-0 cursor-col-resize z-50 transition-colors"
-          style={{ width: 4, background: "transparent" }}
+          className="flex-shrink-0 cursor-col-resize z-50 bg-transparent hover:bg-r6-accent transition-colors"
+          style={{ width: 4 }}
           onMouseDown={startLeftResize}
-          onMouseEnter={(e) =>
-            (e.currentTarget.style.background = "var(--color-r6-accent)")
-          }
-          onMouseLeave={(e) =>
-            (e.currentTarget.style.background = "transparent")
-          }
         />
       )}
 
       {/* Center — canvas fills remaining space.
           pointer-events-none during resize stops the browser from computing
           :hover states on the hundreds of Konva / DOM nodes inside. */}
-      <div
-        className="flex-1 min-w-0 flex flex-col"
-        style={{ pointerEvents: anyResizing ? "none" : undefined }}
-      >
+      <div className={cn("flex-1 min-w-0 flex flex-col", anyResizing && "pointer-events-none")}>
         <MainCanvas
           isLeftOpen={isLeftOpen}
           onToggleLeft={() => setIsLeftOpen((v) => !v)}
@@ -139,15 +130,9 @@ function App() {
       {/* Right resize handle */}
       {isRightSidebarOpen && (
         <div
-          className="flex-shrink-0 cursor-col-resize z-50 transition-colors"
-          style={{ width: 4, background: "transparent" }}
+          className="flex-shrink-0 cursor-col-resize z-50 bg-transparent hover:bg-r6-accent transition-colors"
+          style={{ width: 4 }}
           onMouseDown={startRightResize}
-          onMouseEnter={(e) =>
-            (e.currentTarget.style.background = "var(--color-r6-accent)")
-          }
-          onMouseLeave={(e) =>
-            (e.currentTarget.style.background = "transparent")
-          }
         />
       )}
 

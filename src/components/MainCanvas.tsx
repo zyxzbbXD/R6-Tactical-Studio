@@ -20,19 +20,22 @@ import {
   FileImage, FileText, Film, FileJson,
   Image as ImageIcon, Layers2, Type, Flag, Box, ArrowUpDown,
   PanelLeftClose, PanelLeftOpen, LayoutTemplate,
-  Spline, Route, MessageSquare,
+  Spline, Route, MessageSquare, Tag,
 } from "lucide-react";
 import { dragState } from "../store/dragState";
 // Hardcoded blueprint scale factors per map id.
 // Each value scales the blueprint image so it visually fills the 6400×3600 canvas.
 // Maps not listed fall back to 1.0.
 const BLUEPRINT_MANUAL_SCALES: Record<string, number> = {
-  bank:       1.0,
-  chalet:     1.0,
-  clubhouse:  1.25,
-  consulate:  2.75,
-  fortress:   3.0,
-  lair:       3.0,
+  bank:             1.0,
+  border:           1.0,
+  chalet:           1.0,
+  clubhouse:        1.25,
+  consulate:        2.75,
+  fortress:         3.0,
+  kafe:             3.0,
+  lair:             3.0,
+  nighthavenlabs:   2.5,
 };
 import FloatingVideoPlayer from "./FloatingVideoPlayer";
 import FloatingExportWindow from "./FloatingExportWindow";
@@ -47,6 +50,7 @@ import {
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useProjectStore } from "../store/useProjectStore";
 import { t } from "../locales/i18n";
+import { cn } from "../utils/cn";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -306,14 +310,12 @@ function ToolBtn({
       title={label}
       onClick={onClick}
       disabled={disabled}
-      className="flex shrink-0 h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-      style={{
-        background: active ? "var(--color-r6-accent-dim)" : "transparent",
-        color:      active ? "var(--color-r6-accent)"     : "var(--color-r6-muted)",
-        border:     active ? "1px solid var(--color-r6-accent)" : "1px solid transparent",
-      }}
-      onMouseEnter={(e) => { if (!active && !disabled) { e.currentTarget.style.color = "var(--color-r6-text)"; e.currentTarget.style.background = "var(--color-r6-surface-2)"; } }}
-      onMouseLeave={(e) => { if (!active && !disabled) { e.currentTarget.style.color = "var(--color-r6-muted)"; e.currentTarget.style.background = "transparent"; } }}
+      className={cn(
+        "flex shrink-0 h-8 w-8 items-center justify-center rounded-lg transition-colors border disabled:opacity-30 disabled:cursor-not-allowed",
+        active
+          ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
+          : "bg-transparent text-r6-muted border-transparent hover:text-r6-text hover:bg-r6-surface-2"
+      )}
     >
       <Icon size={15} />
     </button>
@@ -321,7 +323,7 @@ function ToolBtn({
 }
 
 function Divider() {
-  return <div className="mx-1 h-5 w-px shrink-0" style={{ background: "var(--color-r6-border)" }} />;
+  return <div className="mx-1 h-5 w-px shrink-0 bg-r6-border" />;
 }
 
 function Dropdown<T extends string>({
@@ -349,38 +351,31 @@ function Dropdown<T extends string>({
     <div ref={ref} className="relative shrink-0">
       <button
         onClick={() => setOpen(!open)}
-        className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[14px] font-medium"
-        style={{
-          background: "var(--color-r6-surface-2)",
-          color:      value ? "var(--color-r6-text)" : "var(--color-r6-muted)",
-          border:     "1px solid var(--color-r6-border)",
-          minWidth,
-        }}
+        className={cn(
+          "flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[14px] font-medium bg-r6-surface-2 border border-r6-border",
+          value ? "text-r6-text" : "text-r6-muted"
+        )}
+        style={{ minWidth }}
       >
-        {Icon && <Icon size={13} style={{ opacity: 0.7, flexShrink: 0 }} />}
+        {Icon && <Icon size={13} className="opacity-70 shrink-0" />}
         <span className="flex-1 text-left truncate">{label}</span>
-        <ChevronDown size={12} style={{ opacity: 0.5, flexShrink: 0 }} />
+        <ChevronDown size={12} className="opacity-50 shrink-0" />
       </button>
       {open && (
         <div
-          className="absolute left-0 top-full z-50 mt-1 rounded-xl py-1"
+          className="absolute left-0 top-full z-50 mt-1 rounded-xl py-1 bg-r6-surface border border-r6-border w-max"
           style={{
-            background: "var(--color-r6-surface)",
-            border:     "1px solid var(--color-r6-border)",
-            boxShadow:  "0 8px 24px rgba(0,0,0,0.55)",
-            minWidth, maxHeight: 260, overflowY: "auto",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.55)",
+            maxHeight: 260, overflowY: "auto",
           }}
         >
           {items.map((item) => (
             <button key={item.id}
               onClick={() => { onChange(item.id); setOpen(false); }}
-              className="flex w-full items-center justify-between gap-2 pl-4 pr-3 py-1.5 text-[14px]"
-              style={{ color: "var(--color-r6-text)" }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              className="flex w-full items-center justify-between gap-2 pl-4 pr-3 py-1.5 text-[14px] text-r6-text hover:bg-r6-surface-2 transition-colors whitespace-nowrap"
             >
               <span>{item.label}</span>
-              {item.id === value && <span className="text-[12px]" style={{ color: "var(--color-r6-accent)" }}>✓</span>}
+              {item.id === value && <span className="text-[12px] text-r6-accent">✓</span>}
             </button>
           ))}
         </div>
@@ -694,8 +689,8 @@ export default function MainCanvas({
   })));
 
   // ── Settings store ─────────────────────────────────────────────────────────
-  const { isRightSidebarOpen, toggleRightSidebar, language } = useSettingsStore(
-    useShallow((s) => ({ isRightSidebarOpen: s.isRightSidebarOpen, toggleRightSidebar: s.toggleRightSidebar, language: s.language })),
+  const { isRightSidebarOpen, toggleRightSidebar, language, isAdvancedMode } = useSettingsStore(
+    useShallow((s) => ({ isRightSidebarOpen: s.isRightSidebarOpen, toggleRightSidebar: s.toggleRightSidebar, language: s.language, isAdvancedMode: s.isAdvancedMode })),
   );
 
   // ── Project store (save) ───────────────────────────────────────────────────
@@ -703,8 +698,9 @@ export default function MainCanvas({
   const currentProjectId   = useProjectStore((s) => s.currentProjectId);
   const [isSaving,      setIsSaving]      = useState(false);
   const [isExportOpen,  setIsExportOpen]  = useState(false);
-  const exportMenuRef    = useRef<HTMLDivElement>(null);
-  const jsonImportRef    = useRef<HTMLInputElement>(null);
+  const exportMenuRef        = useRef<HTMLDivElement>(null);
+  const jsonImportRef        = useRef<HTMLInputElement>(null);
+  const roomLabelsImportRef  = useRef<HTMLInputElement>(null);
 
   // ── Board store (items / lines / tool / notes) ────────────────────────────
   const {
@@ -716,7 +712,7 @@ export default function MainCanvas({
     imageExportRequested, setImageExportRequested,
     allPhasesExportRequested, setAllPhasesExportRequested,
     setExportWindowOpen,
-    items, lines, throwableLines, texts,
+    items, lines, throwableLines, texts, roomLabels,
     isDraggingIcon,
     pendingOperator, setPendingOperator,
     isVideoOpen, toggleVideo,
@@ -726,6 +722,7 @@ export default function MainCanvas({
     addThrowableLine, removeThrowableLine,
     addRoutePoint, clearRoute,
     addText, updateText, removeText,
+    addRoomLabel, updateRoomLabel, removeRoomLabel,
     setRouteStepStatus,
     isPlaying, setIsPlaying,
     undo,
@@ -742,7 +739,7 @@ export default function MainCanvas({
     imageExportRequested: s.imageExportRequested, setImageExportRequested: s.setImageExportRequested,
     allPhasesExportRequested: s.allPhasesExportRequested, setAllPhasesExportRequested: s.setAllPhasesExportRequested,
     setExportWindowOpen: s.setExportWindowOpen,
-    items: s.items, lines: s.lines, throwableLines: s.throwableLines, texts: s.texts,
+    items: s.items, lines: s.lines, throwableLines: s.throwableLines, texts: s.texts, roomLabels: s.roomLabels,
     isDraggingIcon: s.isDraggingIcon,
     pendingOperator: s.pendingOperator, setPendingOperator: s.setPendingOperator,
     isVideoOpen: s.isVideoOpen, toggleVideo: s.toggleVideo,
@@ -752,6 +749,7 @@ export default function MainCanvas({
     addThrowableLine: s.addThrowableLine, removeThrowableLine: s.removeThrowableLine,
     addRoutePoint: s.addRoutePoint, clearRoute: s.clearRoute,
     addText: s.addText, updateText: s.updateText, removeText: s.removeText,
+    addRoomLabel: s.addRoomLabel, updateRoomLabel: s.updateRoomLabel, removeRoomLabel: s.removeRoomLabel,
     setRouteStepStatus: s.setRouteStepStatus,
     isPlaying: s.isPlaying, setIsPlaying: s.setIsPlaying,
     undo: s.undo,
@@ -763,7 +761,8 @@ export default function MainCanvas({
   // ── Local UI state ────────────────────────────────────────────────────────
   const [selectedId,    setSelectedId]    = useState<string | null>(null);
   const copiedItemRef = useRef<BoardItem | null>(null);
-  const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  const [editingTextId,  setEditingTextId]  = useState<string | null>(null);
+  const [activeRoomEdit, setActiveRoomEdit] = useState<{ id: string; x: number; y: number; text: string; screenX: number; screenY: number } | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ itemId: string; x: number; y: number } | null>(null);
 
   // Wrapper: reset route step and clear resize mode when switching operators
@@ -917,6 +916,8 @@ export default function MainCanvas({
       if (!selectedId) return;
       if (texts.some((t) => t.id === selectedId)) {
         removeText(selectedId);
+      } else if (roomLabels.some((rl) => rl.id === selectedId)) {
+        removeRoomLabel(selectedId);
       } else {
         removeItem(selectedId);
       }
@@ -924,7 +925,7 @@ export default function MainCanvas({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [selectedId, removeItem, removeText, texts]);
+  }, [selectedId, removeItem, removeText, removeRoomLabel, texts, roomLabels]);
 
   // ── Keyboard shortcuts for tool switching + route step 1–5 ───────────────
   useEffect(() => {
@@ -1229,6 +1230,50 @@ export default function MainCanvas({
     URL.revokeObjectURL(url);
   };
 
+  // 自动从 public/maps/ 加载当前楼层的房间名 JSON
+  useEffect(() => {
+    if (!currentMapId || !currentFloorId) return;
+    fetch(`/maps/${currentMapId}-${currentFloorId}-name.json`)
+      .then((res) => {
+        if (res.ok) return res.json();
+        throw new Error("File not found");
+      })
+      .then((data) => {
+        useBoardStore.getState().setRoomLabelsForFloor(currentFloorId, data);
+      })
+      .catch(() => {
+        // 文件不存在时跳过，该楼层尚未配置房间名
+      });
+  }, [currentMapId, currentFloorId]);
+
+  const handleExportRoomLabels = () => {
+    const { roomLabels } = useBoardStore.getState();
+    const labelsForFloor = roomLabels.filter((rl) => rl.floorId === currentFloorId);
+    const blob = new Blob([JSON.stringify(labelsForFloor, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${currentMapId}-${currentFloorId}-name.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportRoomLabels = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !currentFloorId) return;
+    e.target.value = "";
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string);
+        useBoardStore.getState().setRoomLabelsForFloor(currentFloorId, data);
+      } catch {
+        alert("导入失败：JSON 格式不正确");
+      }
+    };
+    reader.readAsText(file);
+  };
+
   const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1412,8 +1457,8 @@ export default function MainCanvas({
         x: pos.x, y: pos.y,
         rotation: 0, scaleX: 1, scaleY: 1,
       });
-      setPendingOperator(null);
-      setTool("cursor");
+      // Keep tool + pendingOperator active for continuous multi-placement.
+      // User presses Escape or selects another tool to exit.
       return;
     }
 
@@ -1428,6 +1473,35 @@ export default function MainCanvas({
           fill: brushColor,
           rotation: 0, scaleX: 1, scaleY: 1,
         });
+        setTool("cursor");
+      }
+      return;
+    }
+
+    if (tool === "room_name") {
+      if (e.target === stage) {
+        const pos = toMapCoords(stage);
+        const newId = crypto.randomUUID();
+
+        // 1. 写入 Zustand (加上 currentFloorId 确保楼层隔离)
+        addRoomLabel({
+          id: newId,
+          x: pos.x, y: pos.y,
+          text: "Room",
+          fontSize: 60,
+          fill: "#ffffff",
+          rotation: 0, scaleX: 1, scaleY: 1,
+        }); // floorId injected by store from useCanvasStore.getState().currentFloorId
+
+        // 2. 获取原生屏幕坐标，绕开 Konva 的矩阵缩放
+        const rect = containerRef.current?.getBoundingClientRect();
+        const sx = rect ? e.evt.clientX - rect.left : e.evt.clientX;
+        const sy = rect ? e.evt.clientY - rect.top  : e.evt.clientY;
+
+        console.log("🔥 Room Name Created! Spawning textarea at:", sx, sy);
+
+        // 3. 激活 HTML 文本框并重置鼠标工具
+        setActiveRoomEdit({ id: newId, x: pos.x, y: pos.y, text: "Room", screenX: sx, screenY: sy });
         setTool("cursor");
       }
       return;
@@ -1519,6 +1593,7 @@ export default function MainCanvas({
     route:          "Route · click operator to select, then click canvas to add waypoints (max 5) · Eraser clears route  (R)",
     text:           t("hint.text",      language),
     place_operator: `${t("hint.placing", language)} ${pendingOperator?.name ?? "operator"} · click on map to place · Esc to cancel`,
+    room_name: t("hint.room_name", language),
   };
 
   const toolConfig: { id: Tool; icon: React.ElementType; label: string; dividerBefore?: boolean }[] = [
@@ -1529,6 +1604,7 @@ export default function MainCanvas({
     { id: "throwable", icon: Spline,         label: "Throwable  (T)", dividerBefore: true },
     { id: "route",     icon: Route,          label: "Route      (R)" },
     { id: "text",      icon: MessageSquare,  label: "Text       (X)" },
+    ...(isAdvancedMode ? [{ id: "room_name" as Tool, icon: Tag, label: "Room Label", dividerBefore: true }] : []),
   ];
 
   // ── Memoized Stage layers — excluded from zoomPercent re-renders ──────────
@@ -1795,6 +1871,43 @@ export default function MainCanvas({
               onDragEnd={(e) => updateText(tn.id, { x: e.target.x(), y: e.target.y() })}
             />
           ))}
+
+        {/* 房间名称渲染 */}
+        {roomLabels
+          .filter((rl) => rl.floorId === currentFloorId)
+          .map((label) => (
+            <KonvaText
+              key={label.id}
+              x={label.x}
+              y={label.y}
+              text={activeRoomEdit?.id === label.id ? "" : label.text}
+              fontSize={label.fontSize}
+              fill={label.fill}
+              stroke="rgba(0,0,0,0.85)"
+              strokeWidth={4}
+              fillAfterStrokeEnabled={true}
+              fontStyle="bold"
+              rotation={label.rotation}
+              scaleX={label.scaleX}
+              scaleY={label.scaleY}
+              draggable={tool === "cursor"}
+              listening={tool === "cursor" || tool === "eraser"}
+              onClick={(e) => {
+                e.cancelBubble = true;
+                if (tool === "eraser") removeRoomLabel(label.id);
+              }}
+              onDblClick={(e) => {
+                e.cancelBubble = true;
+                if (tool === "cursor") {
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  const sx = rect ? e.evt.clientX - rect.left : e.evt.clientX;
+                  const sy = rect ? e.evt.clientY - rect.top  : e.evt.clientY;
+                  setActiveRoomEdit({ id: label.id, x: label.x, y: label.y, text: label.text, screenX: sx, screenY: sy });
+                }
+              }}
+              onDragEnd={(e) => updateRoomLabel(label.id, { x: e.target.x(), y: e.target.y() })}
+            />
+          ))}
         </KonvaGroup>
       </Layer>
     </>
@@ -1807,17 +1920,15 @@ export default function MainCanvas({
       items, selectedId, transformingItemId,
       handleSelectOperator, setResizingItemId, setTransformingItemId,
       updateItem, removeLine, removeThrowableLine, removeItem, clearRoute,
-      texts, editingTextId, updateText, removeText, handleContextMenu]);
+      texts, editingTextId, updateText, removeText, handleContextMenu,
+      roomLabels, activeRoomEdit, updateRoomLabel, removeRoomLabel]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="relative flex flex-1 flex-col" style={{ background: "var(--color-r6-bg)" }}>
+    <div className="relative flex flex-1 flex-col bg-r6-bg">
 
       {/* ── Toolbar ─────────────────────────────────────────────────────────── */}
-      <div
-        className="relative flex shrink-0 items-center gap-1 px-3 py-1.5 z-20"
-        style={{ background: "var(--color-r6-surface-glass)", borderBottom: "1px solid var(--color-r6-border)", backdropFilter: "blur(10px)" }}
-      >
+      <div className="relative flex shrink-0 items-center gap-1 px-3 py-1.5 z-20 bg-r6-surface-glass border-b border-r6-border backdrop-blur-[10px]">
         {/* Panel toggle + Reset workspace */}
         <ToolBtn
           icon={isLeftOpen ? PanelLeftClose : PanelLeftOpen}
@@ -1838,7 +1949,7 @@ export default function MainCanvas({
         {/* Floor selector */}
         {map && floorItems.length > 1 && (
           <>
-            <span className="text-[13px]" style={{ color: "var(--color-r6-muted-2)" }}>›</span>
+            <span className="text-[13px] text-r6-muted-2">›</span>
             <Dropdown value={currentFloorId} placeholder="…" items={floorItems}
               onChange={(id) => setFloor(id)} minWidth={68} />
           </>
@@ -1849,27 +1960,23 @@ export default function MainCanvas({
           <div ref={phaseRef} className="relative shrink-0">
             <button
               onClick={() => setPhaseOpen((o) => !o)}
-              className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[14px] font-medium"
-              style={{
-                background: phaseOpen ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-                color:      phaseOpen ? "var(--color-r6-accent)"     : "var(--color-r6-text)",
-                border:     phaseOpen ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
-                minWidth: 112,
-              }}
+              className={cn(
+                "flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[14px] font-medium border",
+                phaseOpen
+                  ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
+                  : "bg-r6-surface-2 text-r6-text border-r6-border"
+              )}
+              style={{ minWidth: 112 }}
             >
-              <Flag size={13} style={{ opacity: 0.7, flexShrink: 0 }} />
+              <Flag size={13} className="opacity-70 shrink-0" />
               <span className="flex-1 text-left truncate">{t(`phase_${currentPhase}`, language)}</span>
-              <ChevronDown size={12} style={{ opacity: 0.5, flexShrink: 0 }} />
+              <ChevronDown size={12} className="opacity-50 shrink-0" />
             </button>
             {/* Animated slide-down popover */}
             <div
+              className="absolute left-0 top-[calc(100%+4px)] z-[60] rounded-xl py-1 bg-r6-surface border border-r6-border min-w-[170px]"
               style={{
-                position: "absolute", left: 0, top: "calc(100% + 4px)", zIndex: 60,
-                background: "var(--color-r6-surface)",
-                border: "1px solid var(--color-r6-border)",
-                borderRadius: 12,
                 boxShadow: "0 8px 24px rgba(0,0,0,0.55)",
-                minWidth: 170, padding: "4px 0",
                 opacity: phaseOpen ? 1 : 0,
                 transform: phaseOpen ? "translateY(0)" : "translateY(-6px)",
                 pointerEvents: phaseOpen ? "auto" : "none",
@@ -1880,13 +1987,13 @@ export default function MainCanvas({
                 <button
                   key={ph}
                   onClick={() => { setPhase(ph); setPhaseOpen(false); }}
-                  className="flex w-full items-center justify-between gap-2 pl-4 pr-3 py-1.5 text-[14px]"
-                  style={{ color: ph === currentPhase ? "var(--color-r6-accent)" : "var(--color-r6-text)" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  className={cn(
+                    "flex w-full items-center justify-between gap-2 pl-4 pr-3 py-1.5 text-[14px] hover:bg-r6-surface-2 transition-colors",
+                    ph === currentPhase ? "text-r6-accent" : "text-r6-text"
+                  )}
                 >
                   <span>{t(`phase_${ph}`, language)}</span>
-                  {ph === currentPhase && <span style={{ color: "var(--color-r6-accent)" }}>✓</span>}
+                  {ph === currentPhase && <span className="text-r6-accent">✓</span>}
                 </button>
               ))}
             </div>
@@ -1896,7 +2003,7 @@ export default function MainCanvas({
         {/* View selector */}
         {map && (
           <>
-            <span className="text-[13px]" style={{ color: "var(--color-r6-muted-2)" }}>›</span>
+            <span className="text-[13px] text-r6-muted-2">›</span>
             <Dropdown<ViewMode>
               value={currentView}
               placeholder={t("view_standard", language)}
@@ -1940,11 +2047,9 @@ export default function MainCanvas({
         <div className="flex-1 shrink-0" />
 
         {/* Zoom strip */}
-        <div className="flex shrink-0 h-7 items-center rounded-lg overflow-hidden"
-          style={{ background: "var(--color-r6-surface-2)", border: "1px solid var(--color-r6-border)" }}>
+        <div className="flex shrink-0 h-7 items-center rounded-lg overflow-hidden bg-r6-surface-2 border border-r6-border">
           <ToolBtn icon={ZoomOut}   label="Zoom out"      onClick={() => zoomStep(-1)} />
-          <button className="h-7 w-12 flex items-center justify-center text-[13px] font-mono"
-            style={{ color: "var(--color-r6-muted)" }}
+          <button className="h-7 w-12 flex items-center justify-center text-[13px] font-mono text-r6-muted"
             onClick={fitToScreen} title="Fit to screen">
             {zoomPercent}%
           </button>
@@ -1958,14 +2063,12 @@ export default function MainCanvas({
         <button
           title={t("Video", language)}
           onClick={toggleVideo}
-          className="flex shrink-0 h-7 w-7 items-center justify-center rounded-lg"
-          style={{
-            background:  isVideoOpen ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-            color:       isVideoOpen ? "var(--color-r6-accent)"     : "#a1a1aa",
-            border:      isVideoOpen ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
-          }}
-          onMouseEnter={(e) => { if (!isVideoOpen) { e.currentTarget.style.background = "var(--color-r6-accent-dim)"; e.currentTarget.style.color = "var(--color-r6-accent)"; e.currentTarget.style.borderColor = "var(--color-r6-accent)"; } }}
-          onMouseLeave={(e) => { if (!isVideoOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "#a1a1aa"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
+          className={cn(
+            "flex shrink-0 h-7 w-7 items-center justify-center rounded-lg border transition-colors",
+            isVideoOpen
+              ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
+              : "bg-r6-surface-2 text-r6-muted border-r6-border hover:bg-r6-accent-dim hover:text-r6-accent hover:border-r6-accent"
+          )}
         >
           <Video size={14} />
         </button>
@@ -1974,14 +2077,12 @@ export default function MainCanvas({
         <button
           title="Toggle AI &amp; Notes panel"
           onClick={toggleRightSidebar}
-          className="flex shrink-0 h-7 w-7 items-center justify-center rounded-lg"
-          style={{
-            background:  isRightSidebarOpen ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-            color:       isRightSidebarOpen ? "var(--color-r6-accent)"     : "#a1a1aa",
-            border:      isRightSidebarOpen ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
-          }}
-          onMouseEnter={(e) => { if (!isRightSidebarOpen) { e.currentTarget.style.background = "var(--color-r6-accent-dim)"; e.currentTarget.style.color = "var(--color-r6-accent)"; e.currentTarget.style.borderColor = "var(--color-r6-accent)"; } }}
-          onMouseLeave={(e) => { if (!isRightSidebarOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "#a1a1aa"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
+          className={cn(
+            "flex shrink-0 h-7 w-7 items-center justify-center rounded-lg border transition-colors",
+            isRightSidebarOpen
+              ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
+              : "bg-r6-surface-2 text-r6-muted border-r6-border hover:bg-r6-accent-dim hover:text-r6-accent hover:border-r6-accent"
+          )}
         >
           <Bot size={14} />
         </button>
@@ -1995,15 +2096,12 @@ export default function MainCanvas({
             saveCurrentProject().finally(() => setIsSaving(false));
           }}
           disabled={!currentProjectId || isSaving}
-          className="flex shrink-0 h-7 w-7 items-center justify-center rounded-lg"
-          style={{
-            background: isSaving ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-            color: (!currentProjectId || isSaving) ? "var(--color-r6-muted-2)" : "#a1a1aa",
-            border: isSaving ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
-            opacity: !currentProjectId ? 0.4 : 1,
-          }}
-          onMouseEnter={(e) => { if (currentProjectId && !isSaving) { e.currentTarget.style.background = "var(--color-r6-accent-dim)"; e.currentTarget.style.color = "var(--color-r6-accent)"; e.currentTarget.style.borderColor = "var(--color-r6-accent)"; } }}
-          onMouseLeave={(e) => { if (currentProjectId && !isSaving) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "#a1a1aa"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
+          className={cn(
+            "flex shrink-0 h-7 w-7 items-center justify-center rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+            isSaving
+              ? "bg-r6-accent-dim text-r6-muted-2 border-r6-accent"
+              : "bg-r6-surface-2 text-r6-muted border-r6-border hover:bg-r6-accent-dim hover:text-r6-accent hover:border-r6-accent"
+          )}
         >
           {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
         </button>
@@ -2014,30 +2112,24 @@ export default function MainCanvas({
             title="Export tactical brief"
             onClick={() => setIsExportOpen((o) => !o)}
             disabled={isExporting || isExportingGif}
-            className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium whitespace-nowrap overflow-hidden"
-            style={{
-              background: isExportOpen ? "var(--color-r6-accent-dim)" : "var(--color-r6-surface-2)",
-              color: (isExporting || isExportingGif) ? "var(--color-r6-muted-2)" : isExportOpen ? "var(--color-r6-accent)" : "#a1a1aa",
-              border: isExportOpen ? "1px solid var(--color-r6-accent)" : "1px solid var(--color-r6-border)",
-              opacity: (isExporting || isExportingGif) ? 0.6 : 1,
-            }}
-            onMouseEnter={(e) => { if (!isExporting && !isExportingGif && !isExportOpen) { e.currentTarget.style.background = "var(--color-r6-accent-dim)"; e.currentTarget.style.color = "var(--color-r6-accent)"; e.currentTarget.style.borderColor = "var(--color-r6-accent)"; } }}
-            onMouseLeave={(e) => { if (!isExporting && !isExportingGif && !isExportOpen) { e.currentTarget.style.background = "var(--color-r6-surface-2)"; e.currentTarget.style.color = "#a1a1aa"; e.currentTarget.style.borderColor = "var(--color-r6-border)"; } }}
+            className={cn(
+              "flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium whitespace-nowrap overflow-hidden border transition-colors",
+              (isExporting || isExportingGif)
+                ? "opacity-60 bg-r6-surface-2 text-r6-muted-2 border-r6-border"
+                : isExportOpen
+                  ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
+                  : "bg-r6-surface-2 text-r6-muted border-r6-border hover:bg-r6-accent-dim hover:text-r6-accent hover:border-r6-accent"
+            )}
           >
             {(isExporting || isExportingGif) ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
             {t("Export", language)}
-            <ChevronDown size={11} style={{ opacity: 0.6 }} />
+            <ChevronDown size={11} className="opacity-60" />
           </button>
 
           {isExportOpen && (
             <div
-              className="absolute right-0 top-full z-50 mt-1 rounded-xl py-1.5 overflow-hidden"
-              style={{
-                background: "var(--color-r6-surface)",
-                border: "1px solid var(--color-r6-border)",
-                boxShadow: "0 8px 28px rgba(0,0,0,0.5)",
-                minWidth: 192,
-              }}
+              className="absolute right-0 top-full z-50 mt-1 rounded-xl py-1.5 overflow-hidden bg-r6-surface border border-r6-border"
+              style={{ boxShadow: "0 8px 28px rgba(0,0,0,0.5)", minWidth: 192 }}
             >
               {[
                 { key: "Export PDF",       Icon: FileDown,  action: () => { setIsExportOpen(false); handleExport(); } },
@@ -2051,15 +2143,33 @@ export default function MainCanvas({
                 <button
                   key={key}
                   onClick={action}
-                  className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] transition-colors"
-                  style={{ color: "var(--color-r6-text)" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] transition-colors text-r6-text hover:bg-r6-surface-2"
                 >
-                  <Icon size={14} style={{ color: "var(--color-r6-muted)", flexShrink: 0 }} />
+                  <Icon size={14} className="text-r6-muted shrink-0" />
                   {t(key, language)}
                 </button>
               ))}
+
+              {/* 高级模式专属选项 */}
+              {isAdvancedMode && (
+                <>
+                  <div className="mx-3 my-1 border-t border-r6-border" />
+                  <button
+                    onClick={() => { setIsExportOpen(false); handleExportRoomLabels(); }}
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] transition-colors text-r6-accent hover:bg-r6-surface-2"
+                  >
+                    <FileDown size={14} className="shrink-0" />
+                    下载当前层 RoomLabels (Dev)
+                  </button>
+                  <button
+                    onClick={() => { setIsExportOpen(false); roomLabelsImportRef.current?.click(); }}
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] transition-colors text-r6-accent hover:bg-r6-surface-2"
+                  >
+                    <Upload size={14} className="shrink-0" />
+                    上传覆盖 RoomLabels (Dev)
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -2073,6 +2183,13 @@ export default function MainCanvas({
         className="hidden"
         onChange={handleImportJson}
       />
+      <input
+        ref={roomLabelsImportRef}
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={handleImportRoomLabels}
+      />
 
       {/* ── Canvas area ───────────────────────────────────────────────────────── */}
       <div
@@ -2082,11 +2199,10 @@ export default function MainCanvas({
       >
         {/* Export loading overlay — blocks user view while html2canvas renders the template */}
         {isExporting && (
-          <div className="absolute inset-0 flex items-center justify-center z-[9999]"
-            style={{ background: "var(--color-r6-bg)" }}>
+          <div className="absolute inset-0 flex items-center justify-center z-[9999] bg-r6-bg">
             <div className="flex flex-col items-center gap-4">
-              <Loader2 size={32} className="animate-spin" style={{ color: "var(--color-r6-accent)" }} />
-              <p className="text-[14px] font-medium" style={{ color: "var(--color-r6-text)" }}>
+              <Loader2 size={32} className="animate-spin text-r6-accent" />
+              <p className="text-[14px] font-medium text-r6-text">
                 Generating Tactical Brief...
               </p>
             </div>
@@ -2098,8 +2214,7 @@ export default function MainCanvas({
             drop events always land on a real DOM element. */}
         {isDraggingIcon && (
           <div
-            className="absolute inset-0 z-50"
-            style={{ cursor: "copy" }}
+            className="absolute inset-0 z-50 cursor-copy"
             onDragEnter={(e) => e.preventDefault()}
             onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
             onDrop={handleDrop}
@@ -2109,13 +2224,12 @@ export default function MainCanvas({
         {!currentMapId && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="flex flex-col items-center gap-4 text-center">
-              <div className="flex h-16 w-16 items-center justify-center rounded-2xl"
-                style={{ background: "var(--color-r6-surface-2)", border: "1px solid var(--color-r6-border)" }}>
-                <MapPin size={28} style={{ color: "var(--color-r6-muted-2)" }} />
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-r6-surface-2 border border-r6-border">
+                <MapPin size={28} className="text-r6-muted-2" />
               </div>
               <div>
-                <p className="text-[17px] font-medium" style={{ color: "var(--color-r6-text)" }}>{t("No map loaded", language)}</p>
-                <p className="mt-1 text-[14px]" style={{ color: "var(--color-r6-muted)" }}>
+                <p className="text-[17px] font-medium text-r6-text">{t("No map loaded", language)}</p>
+                <p className="mt-1 text-[14px] text-r6-muted">
                   {t("Select a project", language)}
                 </p>
               </div>
@@ -2126,15 +2240,15 @@ export default function MainCanvas({
         {/* Loading spinner */}
         {currentMapId && imageStatus === "loading" && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <Loader2 size={28} className="animate-spin" style={{ color: "var(--color-r6-muted)" }} />
+            <Loader2 size={28} className="animate-spin text-r6-muted" />
           </div>
         )}
 
         {/* ── Konva Stage ───────────────────────────────────────────────────── */}
         {containerSize.width > 0 && containerSize.height > 0 && (
           <div
+            className="w-full h-full"
             style={{
-              width: "100%", height: "100%",
               opacity:   imageStatus === "loaded" ? 1 : 0,
               transform: imageStatus === "loaded" ? "scale(1)" : "scale(0.97)",
               transition: imageStatus === "loaded" ? "opacity 0.3s ease-out, transform 0.3s ease-out" : "none",
@@ -2189,17 +2303,52 @@ export default function MainCanvas({
           );
         })()}
 
+        {/* 绝对定位的独立输入框 */}
+        {activeRoomEdit && (
+          <textarea
+            autoFocus
+            defaultValue={activeRoomEdit.text}
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute",
+              left: activeRoomEdit.screenX,
+              top: activeRoomEdit.screenY,
+              fontSize: "18px",
+              fontFamily: "sans-serif",
+              color: "white",
+              background: "rgba(0,0,0,0.85)",
+              textShadow: "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
+              border: "2px solid var(--color-r6-accent)",
+              borderRadius: 6,
+              padding: "4px 8px",
+              resize: "both",
+              minWidth: 140,
+              zIndex: 999999,
+              outline: "none",
+            }}
+            onBlur={(e) => {
+              updateRoomLabel(activeRoomEdit.id, { text: e.target.value });
+              setActiveRoomEdit(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" || e.key === "Enter") {
+                updateRoomLabel(activeRoomEdit.id, { text: e.currentTarget.value });
+                setActiveRoomEdit(null);
+                e.preventDefault();
+              }
+            }}
+          />
+        )}
+
         {/* Right-click context menu for operator status */}
         {ctxMenu && (
           <div
+            className="absolute bg-r6-surface border border-r6-border rounded-[10px] py-1 min-w-[178px]"
             style={{
-              position: "absolute", left: ctxMenu.x - (containerRef.current?.getBoundingClientRect().left ?? 0),
+              left: ctxMenu.x - (containerRef.current?.getBoundingClientRect().left ?? 0),
               top: ctxMenu.y - (containerRef.current?.getBoundingClientRect().top ?? 0),
               zIndex: 99999,
-              background: "var(--color-r6-surface)",
-              border: "1px solid var(--color-r6-border)",
-              borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,0.6)",
-              minWidth: 178, padding: "4px 0",
+              boxShadow: "0 8px 28px rgba(0,0,0,0.6)",
             }}
             onMouseDown={(e) => e.stopPropagation()}
           >
@@ -2207,17 +2356,16 @@ export default function MainCanvas({
               <button
                 key={s}
                 onClick={() => { setRouteStepStatus(ctxMenu.itemId, currentRouteStep, s); setCtxMenu(null); }}
-                className="flex w-full items-center gap-2.5 px-3 py-1.5 text-[13px]"
-                style={{ color: s === "dead" ? "#ef4444" : s === "planting" ? "#facc15" : "var(--color-r6-text)" }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-r6-surface-2)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                className={cn(
+                  "flex w-full items-center gap-2.5 px-3 py-1.5 text-[13px] hover:bg-r6-surface-2 transition-colors",
+                  s === "dead" ? "text-red-500" : s === "planting" ? "text-yellow-400" : "text-r6-text"
+                )}
               >
-                {s === "normal"   && <span style={{ fontSize: 15 }}>●</span>}
-                {s === "dead"     && <span style={{ fontSize: 15 }}>✕</span>}
-                {s === "planting" && <span style={{ fontSize: 15 }}>P</span>}
+                {s === "normal"   && <span className="text-[15px]">●</span>}
+                {s === "dead"     && <span className="text-[15px]">✕</span>}
+                {s === "planting" && <span className="text-[15px]">P</span>}
                 {t(`mark_${s}`, language)}
-                {/* show current step */}
-                <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--color-r6-muted-2)" }}>
+                <span className="ml-auto text-[11px] text-r6-muted-2">
                   Step {currentRouteStep}
                 </span>
               </button>
@@ -2226,33 +2374,24 @@ export default function MainCanvas({
         )}
 
         {/* Status bar */}
-        <div
-          className="absolute bottom-4 left-4 flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium tracking-wide pointer-events-none"
-          style={{ background: "var(--color-r6-surface-glass-dim)", border: "1px solid var(--color-r6-border)", color: "var(--color-r6-muted)" }}
-        >
-          <span style={{ color: "var(--color-r6-accent)" }}>●</span>
+        <div className="absolute bottom-4 left-4 flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium tracking-wide pointer-events-none bg-r6-surface-glass-dim border border-r6-border text-r6-muted">
+          <span className="text-r6-accent">●</span>
           {statusHints[tool]}
           {selectedId && tool === "cursor" && (
-            <span style={{ color: "var(--color-r6-muted-2)" }}> · {t("hint.del", language)}</span>
+            <span className="text-r6-muted-2"> · {t("hint.del", language)}</span>
           )}
         </div>
 
         {/* Outdated map warning */}
         {map?.id === "fortress" && currentView === "default" && (
-          <div
-            className="absolute top-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg shadow-lg text-sm font-bold z-10 pointer-events-none whitespace-nowrap"
-            style={{ background: "rgba(239,68,68,0.9)", color: "#fff" }}
-          >
+          <div className="absolute top-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg shadow-lg text-sm font-bold z-10 pointer-events-none whitespace-nowrap bg-red-500/90 text-white">
             {t("warning_outdated_map", language)}
           </div>
         )}
 
         {/* Zoom badge */}
         {zoomPercent !== 100 && (
-          <div
-            className="absolute bottom-4 right-4 rounded-lg px-2.5 py-1 text-xs font-mono pointer-events-none"
-            style={{ background: "var(--color-r6-surface-glass-dim)", border: "1px solid var(--color-r6-border)", color: "#d4d4d8" }}
-          >
+          <div className="absolute bottom-4 right-4 rounded-lg px-2.5 py-1 text-xs font-mono pointer-events-none bg-r6-surface-glass-dim border border-r6-border text-zinc-300">
             {zoomPercent}%
           </div>
         )}
@@ -2263,23 +2402,16 @@ export default function MainCanvas({
 
         {/* Left Floating Toolbar — vertical pill of drawing tools */}
         <div
-          className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5 w-12 z-50 pointer-events-auto"
-          style={{
-            background: "var(--color-r6-surface-glass)",
-            border: "1px solid var(--color-r6-border)",
-            borderRadius: 14,
-            boxShadow: "0 8px 32px rgba(0,0,0,0.15)",
-            backdropFilter: "blur(8px)",
-            padding: "12px 8px",
-          }}
+          className="absolute left-4 top-1/2 -translate-y-1/2 flex w-12 min-h-[300px] flex-col items-center justify-center gap-2 rounded-[14px] border border-r6-border bg-r6-surface-glass px-2 py-3 backdrop-blur z-50 pointer-events-auto"
+          style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.15)" }}
         >
           {toolConfig.map(({ id, icon, label, dividerBefore }) => (
             <Fragment key={id}>
-              {dividerBefore && <div className="w-full" style={{ height: 1, background: "var(--color-r6-border)", margin: "2px 0" }} />}
+              {dividerBefore && <div className="w-full h-px bg-r6-border my-0.5" />}
               <ToolBtn icon={icon} label={label} active={tool === id} onClick={() => setTool(id)} />
             </Fragment>
           ))}
-          <div className="w-full" style={{ height: 1, background: "var(--color-r6-border)", margin: "2px 0" }} />
+          <div className="w-full h-px bg-r6-border my-0.5" />
           <ToolBtn icon={Trash2} label="Clear floor" onClick={() => {
             useBoardStore.getState().clearFloor(currentPhase, currentFloorId);
           }} />
