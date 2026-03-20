@@ -1012,7 +1012,12 @@ export default function MainCanvas({
   // Refs
   const stageRef        = useRef<Konva.Stage>(null);
   const containerRef    = useRef<HTMLDivElement>(null);
-  const resizeTimerRef  = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const stageWrapperRef = useRef<HTMLDivElement>(null);
+  const resizeTimerRef      = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const stretchTimerRef     = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const prevContainerSize   = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+  // Tracks the last size committed to state — readable inside ResizeObserver closure.
+  const committedSizeRef    = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
 
 
   // Derived
@@ -1036,19 +1041,37 @@ export default function MainCanvas({
 
   // ── Container resize ───────────────────────────────────────────────────────
   // Debounced by one ~16ms frame so Konva doesn't redraw on every pixel of a sidebar drag.
+  // For large resizes (fullscreen toggle), the stage wrapper is hidden HERE — synchronously,
+  // before the debounce fires — so the Konva canvas never shows the map at the wrong
+  // scale/position. The animation effect reveals it after fitToScreen has corrected everything.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const obs = new ResizeObserver(([entry]) => {
+      const { width: w, height: h } = entry.contentRect;
+      const prev = committedSizeRef.current;
+      const ratio = prev.w > 0 && prev.h > 0
+        ? Math.max(Math.abs(w - prev.w) / prev.w, Math.abs(h - prev.h) / prev.h)
+        : 0;
+      if (ratio > 0.12) {
+        const sw = stageWrapperRef.current;
+        if (sw) {
+          clearTimeout(stretchTimerRef.current);
+          sw.style.transition = "none";
+          sw.style.opacity    = "0";
+        }
+      }
       clearTimeout(resizeTimerRef.current);
       resizeTimerRef.current = setTimeout(() => {
-        setContainerSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+        committedSizeRef.current = { w, h };
+        setContainerSize({ width: w, height: h });
       }, 16);
     });
     obs.observe(el);
     return () => {
       obs.disconnect();
       clearTimeout(resizeTimerRef.current);
+      clearTimeout(stretchTimerRef.current);
     };
   }, []);
 
@@ -1082,6 +1105,39 @@ export default function MainCanvas({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageStatus, containerSize.width, containerSize.height, currentMapId, currentFloorId, currentView]);
+
+  // ── Fullscreen transition: reveal after reposition ─────────────────────────
+  // Fires AFTER fitToScreen (effect ordering). The stage wrapper was already hidden
+  // synchronously in ResizeObserver before Konva had a chance to show the wrong size.
+  // Here we just wait 2 rAFs (frame 1 = Konva batchDraw at correct position,
+  // frame 2 = safe) then fade in — user only ever sees the map correctly placed.
+  useEffect(() => {
+    const { width: w, height: h } = containerSize;
+    const prev = prevContainerSize.current;
+    const isLargeResize =
+      prev.w > 0 && prev.h > 0 &&
+      Math.max(Math.abs(w - prev.w) / prev.w, Math.abs(h - prev.h) / prev.h) > 0.12;
+    prevContainerSize.current = { w, h };
+    if (!isLargeResize) return;
+
+    const el = stageWrapperRef.current;
+    if (!el) return;
+
+    // Frame 1: Konva's batchDraw fires and redraws at the new position.
+    // Frame 2: safe to reveal.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        clearTimeout(stretchTimerRef.current);
+        el.style.transition = "opacity 220ms ease-out";
+        el.style.opacity    = "1";
+        stretchTimerRef.current = setTimeout(() => {
+          el.style.transition = "";
+          el.style.opacity    = "";
+        }, 280);
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [containerSize]);
 
   // Auto-fallback: if the selected view has no image on the new floor, switch to first available
   useEffect(() => {
@@ -2096,7 +2152,7 @@ export default function MainCanvas({
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="relative flex flex-1 flex-col bg-r6-bg">
+    <div className="relative flex flex-1 flex-col min-h-0 bg-r6-bg">
 
       {/* ── Toolbar — fixed, starts at the right edge of the left panel ─────── */}
       <div
@@ -2379,7 +2435,7 @@ export default function MainCanvas({
       {/* ── Canvas area ───────────────────────────────────────────────────────── */}
       <div
         ref={containerRef}
-        className="canvas-grid relative flex-1 overflow-hidden"
+        className="canvas-grid relative flex-1 min-h-0 overflow-hidden"
         style={{ cursor: cursorStyle }}
       >
         {/* Export loading overlay — blocks user view while html2canvas renders the template */}
@@ -2432,6 +2488,7 @@ export default function MainCanvas({
         {/* ── Konva Stage ───────────────────────────────────────────────────── */}
         {containerSize.width > 0 && containerSize.height > 0 && (
           <div
+            ref={stageWrapperRef}
             className="w-full h-full"
             style={{
               opacity:   imageStatus === "loaded" ? 1 : 0,
@@ -2669,20 +2726,23 @@ export default function MainCanvas({
         <MapPreloader currentMap={map} />
 
         {/* Left Floating Toolbar — vertical pill of drawing tools */}
-        <div
-          className="absolute left-4 top-1/2 -translate-y-1/2 flex w-12 min-h-[300px] flex-col items-center justify-center gap-2 rounded-[14px] border border-r6-border bg-r6-surface-glass px-2 py-3 backdrop-blur z-50 pointer-events-auto"
-          style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.15)" }}
-        >
-          {toolConfig.map(({ id, icon, label, dividerBefore }) => (
-            <Fragment key={id}>
-              {dividerBefore && <div className="w-full h-px bg-r6-border my-0.5" />}
-              <ToolBtn icon={icon} label={label} active={tool === id} onClick={() => setTool(id)} />
-            </Fragment>
-          ))}
-          <div className="w-full h-px bg-r6-border my-0.5" />
-          <ToolBtn icon={Trash2} label="Clear floor" onClick={() => {
-            useBoardStore.getState().clearFloor(currentPhase, currentFloorId);
-          }} />
+        {/* Wrapper fills the full canvas height so inner pill is always Y-centered */}
+        <div className="absolute inset-y-0 left-4 flex items-center z-50 pointer-events-none">
+          <div
+            className="flex w-12 flex-col items-center justify-center gap-2 rounded-[14px] border border-r6-border bg-r6-surface-glass px-2 py-3 backdrop-blur pointer-events-auto"
+            style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.15)" }}
+          >
+            {toolConfig.map(({ id, icon, label, dividerBefore }) => (
+              <Fragment key={id}>
+                {dividerBefore && <div className="w-full h-px bg-r6-border my-0.5" />}
+                <ToolBtn icon={icon} label={label} active={tool === id} onClick={() => setTool(id)} />
+              </Fragment>
+            ))}
+            <div className="w-full h-px bg-r6-border my-0.5" />
+            <ToolBtn icon={Trash2} label="Clear floor" onClick={() => {
+              useBoardStore.getState().clearFloor(currentPhase, currentFloorId);
+            }} />
+          </div>
         </div>
 
         {/* Tactical panel — floats right side, shows tool-contextual controls */}

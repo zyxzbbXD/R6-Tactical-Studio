@@ -119,7 +119,7 @@ function App() {
       {/* Center — canvas fills remaining space.
           pointer-events-none during resize stops the browser from computing
           :hover states on the hundreds of Konva / DOM nodes inside. */}
-      <div className={cn("flex-1 min-w-0 flex flex-col", anyResizing && "pointer-events-none")}>
+      <div className={cn("flex-1 min-w-0 min-h-0 flex flex-col", anyResizing && "pointer-events-none")}>
         <MainCanvas
           isLeftOpen={isLeftOpen}
           leftPanelWidth={leftPanelWidth + (isLeftOpen ? 4 : 0)}
