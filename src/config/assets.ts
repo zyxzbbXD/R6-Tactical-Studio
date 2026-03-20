@@ -40,8 +40,8 @@ export const MAPS: MapConfig[] = [
     name: "Bank",
     floors: [
       { id: "b1",   label: "B1",   images: { default: "/maps/bank/b1_default.jpg",   blueprint: "/maps/bank/b1_blueprint.png", isometric: "/maps/bank/b1_isometric.webp", props: "/maps/bank/b1_overlay_props.png", stairs: "/maps/bank/b1_overlay_stairs.png" } },
-      { id: "1f",   label: "1F",   images: { default: "/maps/bank/1f_default.jpg",   blueprint: "/maps/bank/1f_blueprint.png", isometric: "/maps/bank/1f_isometric.webp" } },
-      { id: "2f",   label: "2F",   images: { default: "/maps/bank/2f_default.jpg",   blueprint: "/maps/bank/2f_blueprint.png", isometric: "/maps/bank/2f_isometric.webp" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/bank/1f_default.jpg",   blueprint: "/maps/bank/1f_blueprint.png", isometric: "/maps/bank/1f_isometric.webp", props: "/maps/bank/1f_overlay_props.png", stairs: "/maps/bank/1f_overlay_stairs.png" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/bank/2f_default.jpg",   blueprint: "/maps/bank/2f_blueprint.png", isometric: "/maps/bank/2f_isometric.webp", props: "/maps/bank/2f_overlay_props.png", stairs: "/maps/bank/2f_overlay_stairs.png" } },
       { id: "roof", label: "Roof", images: { default: "/maps/bank/roof_default.jpg" } },
     ],
   },
@@ -58,9 +58,9 @@ export const MAPS: MapConfig[] = [
     id: "chalet",
     name: "Chalet",
     floors: [
-      { id: "b1",   label: "B1",   images: { default: "/maps/chalet/b1_default.jpg",   blueprint: "/maps/chalet/b1_blueprint.png", isometric: "/maps/chalet/b1_isometric.webp" } },
-      { id: "1f",   label: "1F",   images: { default: "/maps/chalet/1f_default.jpg",   blueprint: "/maps/chalet/1f_blueprint.png", isometric: "/maps/chalet/1f_isometric.webp" } },
-      { id: "2f",   label: "2F",   images: { default: "/maps/chalet/2f_default.jpg",   blueprint: "/maps/chalet/2f_blueprint.png", isometric: "/maps/chalet/2f_isometric.webp" } },
+      { id: "b1",   label: "B1",   images: { default: "/maps/chalet/b1_default.jpg",   blueprint: "/maps/chalet/b1_blueprint.png", isometric: "/maps/chalet/b1_isometric.webp", props: "/maps/chalet/b1_overlay_props.png", stairs: "/maps/chalet/b1_overlay_stairs.png" } },
+      { id: "1f",   label: "1F",   images: { default: "/maps/chalet/1f_default.jpg",   blueprint: "/maps/chalet/1f_blueprint.png", isometric: "/maps/chalet/1f_isometric.webp", props: "/maps/chalet/1f_overlay_props.png", stairs: "/maps/chalet/1f_overlay_stairs.png" } },
+      { id: "2f",   label: "2F",   images: { default: "/maps/chalet/2f_default.jpg",   blueprint: "/maps/chalet/2f_blueprint.png", isometric: "/maps/chalet/2f_isometric.webp", props: "/maps/chalet/2f_overlay_props.png", stairs: "/maps/chalet/2f_overlay_stairs.png" } },
       { id: "roof", label: "Roof", images: { default: "/maps/chalet/roof_default.jpg" } },
     ],
   },
