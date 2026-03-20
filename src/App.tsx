@@ -92,8 +92,8 @@ function App() {
 
   // ── Sidebar panel widths (0 when closed, with optional CSS transition) ─────
   const leftPanelWidth  = isLeftOpen ? leftWidth : 0;
-  const leftTransition  = anyResizing ? "none" : "opacity 0.2s ease";
-  const rightTransition = anyResizing ? "none" : "opacity 0.2s ease";
+  const leftTransition  = anyResizing ? "none" : "width 200ms ease, opacity 200ms ease";
+  const rightTransition = anyResizing ? "none" : "width 200ms ease, opacity 200ms ease";
 
   return (
     <div
@@ -122,6 +122,7 @@ function App() {
       <div className={cn("flex-1 min-w-0 flex flex-col", anyResizing && "pointer-events-none")}>
         <MainCanvas
           isLeftOpen={isLeftOpen}
+          leftPanelWidth={leftPanelWidth + (isLeftOpen ? 4 : 0)}
           onToggleLeft={() => setIsLeftOpen((v) => !v)}
           onResetWorkspace={resetWorkspace}
         />

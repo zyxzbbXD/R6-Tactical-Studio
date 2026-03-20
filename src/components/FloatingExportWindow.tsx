@@ -46,7 +46,7 @@ export default function FloatingExportWindow() {
     const board  = useBoardStore.getState();
     const canvas = useCanvasStore.getState();
     const data = {
-      version: "1.1",
+      version: "1.2",
       mapId:          canvas.currentMapId,
       floorId:        canvas.currentFloorId,
       items:          board.items,
@@ -54,6 +54,8 @@ export default function FloatingExportWindow() {
       throwableLines: board.throwableLines,
       texts:          board.texts,
       notes:          board.notes,
+      routeTimeMap:   board.routeTimeMap,
+      hiddenOperators: board.hiddenOperators,
       exportedAt:     Date.now(),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });

@@ -15,12 +15,15 @@ interface SettingsState {
 
   // UI state — persisted so panel stays open across reloads
   isRightSidebarOpen: boolean;
-  rightSidebarTab: "ai" | "export";
+  rightSidebarTab: "timeline" | "ai";
   isSettingsOpen: boolean;
   isImportModalOpen: boolean;
 
   // Advanced mode — unlocks power-user tools (e.g. custom room labels)
   isAdvancedMode: boolean;
+
+  // AI auxiliary mode — opt-in beta feature
+  isAiModeEnabled: boolean;
 
   // Actions
   setApiKey: (key: string) => void;
@@ -35,6 +38,8 @@ interface SettingsState {
   openImportModal: () => void;
   closeImportModal: () => void;
   setAdvancedMode: (v: boolean) => void;
+  setAiModeEnabled: (val: boolean) => void;
+  setRightSidebarTab: (tab: "timeline" | "ai") => void;
 }
 
 // ─── Store ─────────────────────────────────────────────────────────────────────
@@ -48,10 +53,11 @@ export const useSettingsStore = create<SettingsState>()(
       theme: "dark",
       language: "zh",
       isRightSidebarOpen: false,
-      rightSidebarTab: "ai",
+      rightSidebarTab: "timeline",
       isSettingsOpen: false,
       isImportModalOpen: false,
       isAdvancedMode: false,
+      isAiModeEnabled: false,
 
       setApiKey: (key) => set({ apiKey: key }),
       setBaseUrl: (url) => set({ baseUrl: url }),
@@ -59,12 +65,14 @@ export const useSettingsStore = create<SettingsState>()(
       setTheme: (theme) => set({ theme }),
       setLanguage: (language) => set({ language }),
       toggleRightSidebar: () => set((s) => ({ isRightSidebarOpen: !s.isRightSidebarOpen })),
-      openExportPanel: () => set({ isRightSidebarOpen: true, rightSidebarTab: "export" }),
+      openExportPanel: () => set({ isRightSidebarOpen: true }),
       openSettings: () => set({ isSettingsOpen: true }),
       closeSettings: () => set({ isSettingsOpen: false }),
       openImportModal: () => set({ isImportModalOpen: true }),
       closeImportModal: () => set({ isImportModalOpen: false }),
       setAdvancedMode: (v) => set({ isAdvancedMode: v }),
+      setAiModeEnabled: (val) => set({ isAiModeEnabled: val }),
+      setRightSidebarTab: (tab) => set({ rightSidebarTab: tab }),
     }),
     {
       name: "r6-settings",
@@ -76,6 +84,7 @@ export const useSettingsStore = create<SettingsState>()(
         language: s.language,
         isRightSidebarOpen: s.isRightSidebarOpen,
         isAdvancedMode: s.isAdvancedMode,
+        isAiModeEnabled: s.isAiModeEnabled,
       }),
     }
   )

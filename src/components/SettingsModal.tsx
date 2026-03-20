@@ -1,5 +1,5 @@
 import { useRef, useEffect, forwardRef } from "react";
-import { X, Key, Globe, Cpu, Sun, Moon, Languages, Settings2 } from "lucide-react";
+import { X, Key, Globe, Cpu, Sun, Moon, Languages, Settings2, Bot } from "lucide-react";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { t } from "../locales/i18n";
 import { cn } from "../utils/cn";
@@ -24,6 +24,7 @@ export default function SettingsModal() {
     theme, setTheme,
     language, setLanguage,
     isAdvancedMode, setAdvancedMode,
+    isAiModeEnabled, setAiModeEnabled,
   } = useSettingsStore();
 
   // Close on Escape key
@@ -75,34 +76,75 @@ export default function SettingsModal() {
           </button>
         </div>
 
-        {/* Fields */}
-        <div className="flex flex-col gap-6 px-6 py-6">
-          <Field
-            ref={firstInputRef}
-            icon={<Globe size={15} />}
-            label={t("Base URL", language)}
-            hint={t("Base URL hint", language)}
-            value={baseUrl}
-            onChange={setBaseUrl}
-            placeholder="https://api.openai.com"
-          />
-          <Field
-            icon={<Key size={15} />}
-            label={t("API Key", language)}
-            hint={t("API Key hint", language)}
-            value={apiKey}
-            onChange={setApiKey}
-            placeholder="sk-..."
-            type="password"
-          />
-          <Field
-            icon={<Cpu size={15} />}
-            label={t("Model", language)}
-            hint={t("Model hint", language)}
-            value={model}
-            onChange={setModel}
-            placeholder="gpt-4o-mini"
-          />
+        {/* Fields — scrollable so modal never clips off-screen */}
+        <div className="flex flex-col gap-6 px-6 py-6 max-h-[65vh] overflow-y-auto">
+
+          {/* AI Auxiliary Mode toggle */}
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <span className="text-r6-muted"><Bot size={15} /></span>
+                <span className="text-[14px] font-medium text-r6-text">
+                  AI辅助模式
+                  <span className="ml-2 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-r6-accent-dim text-r6-accent border border-r6-accent/40">
+                    Beta
+                  </span>
+                </span>
+              </div>
+              <p className="text-[13px] text-r6-muted-2 leading-snug">
+                启用 AI 战术分析助手与 API 配置
+              </p>
+            </div>
+            <button
+              onClick={() => setAiModeEnabled(!isAiModeEnabled)}
+              className={cn(
+                "relative mt-0.5 shrink-0 inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none",
+                isAiModeEnabled ? "bg-r6-accent" : "bg-r6-surface-3"
+              )}
+              role="switch"
+              aria-checked={isAiModeEnabled}
+            >
+              <span
+                className={cn(
+                  "inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                  isAiModeEnabled ? "translate-x-6" : "translate-x-1"
+                )}
+              />
+            </button>
+          </div>
+
+          {/* API fields — only visible when AI mode is enabled */}
+          {isAiModeEnabled && (
+            <>
+              <div className="border-t border-r6-border" />
+              <Field
+                ref={firstInputRef}
+                icon={<Globe size={15} />}
+                label={t("Base URL", language)}
+                hint={t("Base URL hint", language)}
+                value={baseUrl}
+                onChange={setBaseUrl}
+                placeholder="https://api.openai.com"
+              />
+              <Field
+                icon={<Key size={15} />}
+                label={t("API Key", language)}
+                hint={t("API Key hint", language)}
+                value={apiKey}
+                onChange={setApiKey}
+                placeholder="sk-..."
+                type="password"
+              />
+              <Field
+                icon={<Cpu size={15} />}
+                label={t("Model", language)}
+                hint={t("Model hint", language)}
+                value={model}
+                onChange={setModel}
+                placeholder="gpt-4o-mini"
+              />
+            </>
+          )}
 
           {/* Divider */}
           <div className="border-t border-r6-border" />

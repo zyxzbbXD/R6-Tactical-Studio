@@ -1,6 +1,78 @@
 import { create } from "zustand";
 import { useCanvasStore } from "./canvasStore";
 
+// ─── Timeline constants (shared with RightSidebar) ─────────────────────────────
+
+export const TIMELINE_ROWS: { label: string; timePhase: "prep" | "early" | "mid" | "late" }[] = [
+  // PREP — 5 rows, 9-second intervals (rows 0–4)
+  { label: "45s",  timePhase: "prep"  }, // 0
+  { label: "36s",  timePhase: "prep"  }, // 1
+  { label: "27s",  timePhase: "prep"  }, // 2
+  { label: "18s",  timePhase: "prep"  }, // 3
+  { label: "9s",   timePhase: "prep"  }, // 4
+  // EARLY — 6 rows, 10-second intervals: 3:00 → 2:10 (rows 5–10)
+  { label: "3:00", timePhase: "early" }, // 5
+  { label: "2:50", timePhase: "early" }, // 6
+  { label: "2:40", timePhase: "early" }, // 7
+  { label: "2:30", timePhase: "early" }, // 8
+  { label: "2:20", timePhase: "early" }, // 9
+  { label: "2:10", timePhase: "early" }, // 10
+  // MID — 6 rows, 10-second intervals: 2:00 → 1:10 (rows 11–16)
+  { label: "2:00", timePhase: "mid"   }, // 11
+  { label: "1:50", timePhase: "mid"   }, // 12
+  { label: "1:40", timePhase: "mid"   }, // 13
+  { label: "1:30", timePhase: "mid"   }, // 14
+  { label: "1:20", timePhase: "mid"   }, // 15
+  { label: "1:10", timePhase: "mid"   }, // 16
+  // LATE — 7 rows, 10-second intervals: 1:00 → 0:00 (rows 17–23)
+  { label: "1:00", timePhase: "late"  }, // 17
+  { label: "0:50", timePhase: "late"  }, // 18
+  { label: "0:40", timePhase: "late"  }, // 19
+  { label: "0:30", timePhase: "late"  }, // 20
+  { label: "0:20", timePhase: "late"  }, // 21
+  { label: "0:10", timePhase: "late"  }, // 22
+  { label: "0:00", timePhase: "late"  }, // 23
+];
+
+/** Row index where each tactical phase begins in TIMELINE_ROWS. */
+export const PHASE_START_ROW: Record<number, number> = { 1: 0, 2: 5, 3: 11, 4: 17 };
+
+/**
+ * Returns the default timeline row for a given route step, grouped tightly
+ * within the temporal section that corresponds to the current tactical phase:
+ *   Phase 1 (Prep)  → rows 0–4   (45s – 9s)
+ *   Phase 2 (Early) → rows 5–9   (3:00 – 2:20)
+ *   Phase 3 (Mid)   → rows 11–15 (2:00 – 1:20)
+ *   Phase 4 (Late)  → rows 17–21 (1:00 – 0:20)
+ */
+export function getDefaultRowForStep(phase: number, step: number): number {
+  const base = PHASE_START_ROW[phase] ?? 0;
+  return base + (step - 1); // steps 1–5 → base+0 … base+4
+}
+
+/**
+ * Returns the final state of an item based on its last occupied route waypoint:
+ * position, the floor the operator ended up on, and their status at that point.
+ * Falls back to the item's own base values when no route waypoints exist.
+ */
+function lastRouteState(item: BoardItem): {
+  x: number;
+  y: number;
+  floorId: string | null;
+  status: Waypoint["status"];
+} {
+  for (let s = 5; s >= 2; s--) {
+    const wp = (item.route as Record<number, Waypoint | undefined>)[s];
+    if (wp) return {
+      x: wp.x,
+      y: wp.y,
+      floorId: wp.floorId ?? item.floorId,
+      status: wp.status,
+    };
+  }
+  return { x: item.x, y: item.y, floorId: item.floorId, status: undefined };
+}
+
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export type Tool =
@@ -23,6 +95,8 @@ export interface Waypoint {
   x: number;
   y: number;
   status?: "normal" | "dead" | "planting";
+  /** Floor this waypoint is placed on. Undefined = inherits previous step's floor. */
+  floorId?: string | null;
 }
 
 export interface TextNode {
@@ -52,6 +126,27 @@ export interface RoomLabel {
   scaleX: number;
   scaleY: number;
   floorId: string | null;
+}
+
+// ─── AI Timeline JSON ──────────────────────────────────────────────────────────
+
+export interface AITimelineStep {
+  step: number;           // 1–5 sequential
+  phase: 1 | 2 | 3 | 4;  // 1=Prep, 2=Early, 3=Mid, 4=Late
+  location: string;       // Specific room / map area
+  tip: string;            // Concise action instruction
+}
+
+export interface AITimelineOperator {
+  operatorId: string;
+  start_floor: string;  // e.g. "1F", "2F", "B1"
+  steps: AITimelineStep[];
+}
+
+export interface AITimelineJson {
+  title: string;
+  overall_strategy: string;
+  operators: AITimelineOperator[];
 }
 
 export interface BoardItem {
@@ -150,6 +245,19 @@ interface BoardState {
   // Presentation playback
   isPlaying: boolean;
 
+  // ── Timeline state ───────────────────────────────────────────────────────────
+  /** Operator ids whose tokens are hidden on canvas */
+  hiddenOperators: string[];
+  /**
+   * Per-operator, per-step row index in the timeline.
+   * routeTimeMap[itemId][step (1-5)] = rowIndex (0-22)
+   */
+  routeTimeMap: Record<string, Record<number, number>>;
+  /** Current scanline row during timeline playback */
+  playbackRowIndex: number;
+  /** Whether the timeline scanline is actively playing */
+  isPlayingTimeline: boolean;
+
   // Double-click resize state (scale slider in TacticalPanel)
   resizingItemId: string | null;
   // Double-click transform state (Konva Transformer overlay)
@@ -187,6 +295,10 @@ interface BoardState {
   updateRoomLabel: (id: string, updates: Partial<RoomLabel>) => void;
   removeRoomLabel: (id: string) => void;
   setRoomLabelsForFloor: (floorId: string, labels: RoomLabel[]) => void;
+  toggleOperatorVisibility: (id: string) => void;
+  setPlaybackRowIndex: (i: number) => void;
+  setIsPlayingTimeline: (v: boolean) => void;
+  setRouteTimeMapping: (itemId: string, step: number, rowIndex: number) => void;
   setRouteStepStatus: (itemId: string, step: 1 | 2 | 3 | 4 | 5, status: "normal" | "dead" | "planting") => void;
   addItem: (item: Omit<BoardItem, "phase" | "route" | "scale" | "floorId">) => void;
   updateItem: (id: string, updates: Partial<BoardItem>) => void;
@@ -206,6 +318,13 @@ interface BoardState {
   addVideoMarker: (marker: VideoMarker) => void;
   clearVideoMarkers: () => void;
   setPhase: (phase: number) => void;
+  /**
+   * Switch to `targetPhase`. When advancing forward by exactly one phase,
+   * if the target phase has no operators on `floorId`, automatically clones
+   * operators from the current phase (using their final route position as
+   * the new base x/y, with an empty route).
+   */
+  switchPhase: (targetPhase: number, floorId: string | null) => void;
 }
 
 export const useBoardStore = create<BoardState>((set) => ({
@@ -236,9 +355,30 @@ export const useBoardStore = create<BoardState>((set) => ({
   texts: [],
   roomLabels: [],
   isPlaying: false,
+  hiddenOperators: [],
+  routeTimeMap: {},
+  stepTips: {},
+  playbackRowIndex: 0,
+  isPlayingTimeline: false,
   resizingItemId: null,
   transformingItemId: null,
   _history: [],
+
+  toggleOperatorVisibility: (id) =>
+    set((s) => ({
+      hiddenOperators: s.hiddenOperators.includes(id)
+        ? s.hiddenOperators.filter((h) => h !== id)
+        : [...s.hiddenOperators, id],
+    })),
+  setPlaybackRowIndex: (i) => set({ playbackRowIndex: i }),
+  setIsPlayingTimeline: (v) => set({ isPlayingTimeline: v }),
+  setRouteTimeMapping: (itemId, step, rowIndex) =>
+    set((s) => ({
+      routeTimeMap: {
+        ...s.routeTimeMap,
+        [itemId]: { ...(s.routeTimeMap[itemId] ?? {}), [step]: rowIndex },
+      },
+    })),
 
   setTool: (tool) => set({ tool }),
   setBrushStyle: (color, size) => set({ brushColor: color, brushSize: size }),
@@ -343,9 +483,27 @@ export const useBoardStore = create<BoardState>((set) => ({
   addItem: (item) =>
     set((s) => {
       const floorId = useCanvasStore.getState().currentFloorId;
+      // Enforce uniqueness: same operatorId may not appear twice in the same phase
+      if (item.side !== "neutral") {
+        const alreadyExists = s.items.some(
+          (i) => i.operatorId === item.operatorId && i.phase === s.currentPhase
+        );
+        if (alreadyExists) return {};
+      }
+      // Enforce 5-operator limit per side per phase+floor (neutral gadgets are exempt)
+      if (item.side !== "neutral") {
+        const count = s.items.filter(
+          (i) => i.side === item.side && i.phase === s.currentPhase && i.floorId === floorId
+        ).length;
+        if (count >= 5) return {}; // silently reject
+      }
       return {
         items: [...s.items, { ...item, phase: s.currentPhase, route: {}, scale: 3, floorId }],
         _history: [...s._history, { type: "addItem", id: item.id, phase: s.currentPhase, floorId }],
+        routeTimeMap: {
+          ...s.routeTimeMap,
+          [item.id]: { 1: getDefaultRowForStep(s.currentPhase, 1) },
+        },
       };
     }),
 
@@ -355,14 +513,19 @@ export const useBoardStore = create<BoardState>((set) => ({
     })),
 
   removeItem: (id) =>
-    set((s) => ({
-      items: s.items.filter((i) => i.id !== id),
-      // Prune all history entries for this item so undo slots aren't wasted
-      _history: s._history.filter((e) =>
-        !(e.type === "addItem" && e.id === id) &&
-        !(e.type === "addRoutePoint" && e.itemId === id)
-      ),
-    })),
+    set((s) => {
+      const { [id]: _rmMap, ...newRouteTimeMap } = s.routeTimeMap;
+      return {
+        items: s.items.filter((i) => i.id !== id),
+        hiddenOperators: s.hiddenOperators.filter((h) => h !== id),
+        routeTimeMap: newRouteTimeMap,
+        // Prune all history entries for this item so undo slots aren't wasted
+        _history: s._history.filter((e) =>
+          !(e.type === "addItem" && e.id === id) &&
+          !(e.type === "addRoutePoint" && e.itemId === id)
+        ),
+      };
+    }),
 
   addLine: (line) =>
     set((s) => {
@@ -417,16 +580,27 @@ export const useBoardStore = create<BoardState>((set) => ({
         phase: s.currentPhase,
         floorId,
       };
+      // Stamp the current floor onto the waypoint so cross-floor routing works
+      const waypointWithFloor: Waypoint = { ...point, floorId };
+
       const newItems = s.items.map((i) => {
         if (i.id !== itemId) return i;
         // Step 1 = base position; update x/y directly and clear any stale route[1]
         if (step === 1) {
           const { 1: _dropped, ...restRoute } = i.route as Record<number, Waypoint>;
-          return { ...i, x: point.x, y: point.y, route: restRoute };
+          // Also update floorId on the item itself to reflect the new base floor
+          return { ...i, x: point.x, y: point.y, floorId, route: restRoute };
         }
-        return { ...i, route: { ...i.route, [step]: point } };
+        return { ...i, route: { ...i.route, [step]: waypointWithFloor } };
       });
-      return { items: newItems, _history: [...s._history, histEntry] };
+      // Auto-assign default timeline row for this step if not already mapped
+      const existingOpMap = s.routeTimeMap[itemId] ?? {};
+      const newRouteTimeMap: Record<string, Record<number, number>> =
+        step in existingOpMap
+          ? s.routeTimeMap
+          : { ...s.routeTimeMap, [itemId]: { ...existingOpMap, [step]: getDefaultRowForStep(s.currentPhase, step) } };
+
+      return { items: newItems, _history: [...s._history, histEntry], routeTimeMap: newRouteTimeMap };
     }),
 
   clearRoute: (itemId) =>
@@ -517,6 +691,10 @@ export const useBoardStore = create<BoardState>((set) => ({
       texts:          Array.isArray(d.texts)          ? (d.texts          as TextNode[])     : [],
       roomLabels:     Array.isArray(d.roomLabels)     ? (d.roomLabels     as RoomLabel[])    : [],
       notes:          typeof d.notes === "string"     ? d.notes                              : "",
+      hiddenOperators: Array.isArray(d.hiddenOperators) ? (d.hiddenOperators as string[])    : [],
+      routeTimeMap:   (d.routeTimeMap && typeof d.routeTimeMap === "object")
+                        ? (d.routeTimeMap as Record<string, Record<number, number>>)
+                        : {},
       _history: [],
     });
     // Sync map/floor in canvasStore
@@ -529,8 +707,8 @@ export const useBoardStore = create<BoardState>((set) => ({
     }
   },
 
-  clearAll: () => set({ items: [], lines: [], throwableLines: [], texts: [], roomLabels: [], _history: [] }),
-  clearBoard: () => set({ items: [], lines: [], throwableLines: [], texts: [], roomLabels: [], notes: "", _history: [] }),
+  clearAll: () => set({ items: [], lines: [], throwableLines: [], texts: [], roomLabels: [], _history: [], hiddenOperators: [], routeTimeMap: {} }),
+  clearBoard: () => set({ items: [], lines: [], throwableLines: [], texts: [], roomLabels: [], notes: "", _history: [], hiddenOperators: [], routeTimeMap: {} }),
   clearFloor: (phase, floorId) => set((s) => ({
     items:          s.items.filter((i) => !(i.phase === phase && i.floorId === floorId)),
     lines:          s.lines.filter((l) => !(l.phase === phase && l.floorId === floorId)),
@@ -544,6 +722,61 @@ export const useBoardStore = create<BoardState>((set) => ({
   addVideoMarker: (marker) => set((s) => ({ videoMarkers: [...s.videoMarkers, marker] })),
   clearVideoMarkers: () => set({ videoMarkers: [] }),
 
-  // Switch phase — no cloning; each phase is an independent scenario.
+  // Switch phase — no cloning; used internally for export loops.
   setPhase: (phase) => set({ currentPhase: phase }),
+
+  switchPhase: (targetPhase, floorId) =>
+    set((s) => {
+      if (targetPhase === s.currentPhase) return {};
+
+      // Always jump the scanline to the first row of the new phase and reset the route step
+      const phaseSync = {
+        playbackRowIndex: PHASE_START_ROW[targetPhase] ?? 0,
+        currentRouteStep: 1 as const,
+      };
+
+      // Only apply continuity cloning when advancing forward by exactly one phase
+      const isForwardStep = targetPhase === s.currentPhase + 1;
+      if (!isForwardStep) return { currentPhase: targetPhase, ...phaseSync };
+
+      // If the target phase already has operators on this floor, just switch
+      const targetHasOps = s.items.some(
+        (i) => i.phase === targetPhase && i.floorId === floorId && i.side !== "neutral"
+      );
+      if (targetHasOps) return { currentPhase: targetPhase, ...phaseSync };
+
+      // Clone all items from current phase on this floor into the target phase.
+      // Each clone starts at the last-known route position with a fresh empty route.
+      // Dead operators and operators that moved to another floor are excluded.
+      const sourceItems = s.items.filter(
+        (i) => i.phase === s.currentPhase && i.floorId === floorId
+      );
+      const cloned: BoardItem[] = [];
+      for (const item of sourceItems) {
+        const final = lastRouteState(item);
+        if (final.status === "dead") continue;          // Fix 2: skip dead operators
+        cloned.push({
+          ...item,
+          id: crypto.randomUUID(),
+          phase: targetPhase,
+          x: final.x,
+          y: final.y,
+          floorId: final.floorId,                       // Fix 1: inherit final floor
+          route: {} as Record<number, Waypoint>,
+        });
+      }
+
+      // Give each clone a clean routeTimeMap entry for step 1
+      const newRouteTimeMap = { ...s.routeTimeMap };
+      for (const c of cloned) {
+        newRouteTimeMap[c.id] = { 1: getDefaultRowForStep(targetPhase, 1) };
+      }
+
+      return {
+        currentPhase: targetPhase,
+        items: [...s.items, ...cloned],
+        routeTimeMap: newRouteTimeMap,
+        ...phaseSync,
+      };
+    }),
 }));

@@ -16,11 +16,11 @@ import useImage from "use-image";
 import {
   Pencil, ArrowRight, Eraser, Undo2, Trash2,
   ZoomIn, ZoomOut, Maximize2,
-  Video, MapPin, ChevronDown, MousePointer2, Loader2, Bot, FileDown, Save, Upload,
+  Video, MapPin, ChevronDown, ChevronLeft, ChevronRight, MousePointer2, Loader2, Bot, FileDown, Save, Upload,
   FileImage, FileText, Film, FileJson,
-  Image as ImageIcon, Layers2, Type, Flag, Box, ArrowUpDown,
+  Image as ImageIcon, Layers2, Type, Box, ArrowUpDown,
   PanelLeftClose, PanelLeftOpen, LayoutTemplate,
-  Spline, Route, MessageSquare, Tag,
+  Spline, Route, MessageSquare, Tag, TableProperties,
 } from "lucide-react";
 import { dragState } from "../store/dragState";
 // Hardcoded blueprint scale factors per map id.
@@ -63,6 +63,45 @@ const ICON_SIZE = 56;   // operator token load size (SVG rasterization); default
 
 interface Vec2 { x: number; y: number }
 interface Size { width: number; height: number }
+
+/**
+ * Compute an operator's canvas position at a given timeline row index using
+ * strict snap logic — NO lerping. The operator holds its current step position
+ * and only teleports when the scanline reaches (or passes) the next step's row.
+ *
+ * Algorithm: find the HIGHEST step number whose mapped row ≤ playbackRowIndex.
+ * That step's coordinates are the display position.
+ */
+function getSnapPositionAtTimelineRow(
+  item: import("../store/useBoardStore").BoardItem,
+  rowIndex: number,
+  routeTimeMap: Record<string, Record<number, number>>,
+): { x: number; y: number; step: number } {
+  const opMap = routeTimeMap[item.id] ?? {};
+
+  const getStepPos = (step: number) =>
+    step === 1 ? { x: item.x, y: item.y } : ((item.route as Record<number, { x: number; y: number } | undefined>)[step] ?? { x: item.x, y: item.y });
+
+  // Find highest step whose row ≤ rowIndex
+  let bestStep = -1;
+  let bestRow  = -1;
+  for (const [stepStr, row] of Object.entries(opMap)) {
+    const step = Number(stepStr);
+    // Only consider steps that actually have a position (step 1 always has base x/y)
+    if (step !== 1 && !item.route[step]) continue;
+    if (row <= rowIndex && step > bestStep) {
+      bestStep = step;
+      bestRow  = row;
+    }
+  }
+  void bestRow; // used only for selection; position comes from step coords
+
+  if (bestStep === -1) {
+    // Scanline hasn't reached any mapped step yet — show at base position
+    return { ...getStepPos(1), step: 0 };
+  }
+  return { ...getStepPos(bestStep), step: bestStep };
+}
 
 // ─── PDF export helpers ─────────────────────────────────────────────────────
 
@@ -266,15 +305,17 @@ function toCanvasPos(stage: Konva.Stage): Vec2 {
  * If step N has no waypoint, it inherits from step N-1 ("holding angle").
  * Dead status is inherited forward: once dead, stays dead unless overridden.
  */
-function getEffectiveRoute(item: BoardItem): Array<{ x: number; y: number; status: "normal" | "dead" | "planting" }> {
-  type EffPt = { x: number; y: number; status: "normal" | "dead" | "planting" };
-  const pts: EffPt[] = [{ x: item.x, y: item.y, status: "normal" }];
+function getEffectiveRoute(item: BoardItem): Array<{ x: number; y: number; status: "normal" | "dead" | "planting"; floorId: string | null }> {
+  type EffPt = { x: number; y: number; status: "normal" | "dead" | "planting"; floorId: string | null };
+  const pts: EffPt[] = [{ x: item.x, y: item.y, status: "normal", floorId: item.floorId ?? null }];
   for (let i = 1; i <= 5; i++) {
     const prev = pts[i - 1];
     const wp = item.route[i];
     const newStatus: "normal" | "dead" | "planting" =
       wp?.status ?? (prev.status === "dead" ? "dead" : "normal");
-    pts.push({ x: wp?.x ?? prev.x, y: wp?.y ?? prev.y, status: newStatus });
+    // Propagate floorId: use the waypoint's explicit floor, or inherit the previous step's floor
+    const newFloorId = wp?.floorId !== undefined ? (wp.floorId ?? null) : prev.floorId;
+    pts.push({ x: wp?.x ?? prev.x, y: wp?.y ?? prev.y, status: newStatus, floorId: newFloorId });
   }
   return pts;
 }
@@ -488,13 +529,13 @@ const MapImageLayer = memo(function MapImageLayer({
 // ─── Placed operator token ─────────────────────────────────────────────────────
 
 function OperatorToken({
-  item, isSelected, isTransforming, tool, status, onSelect, onUpdate, onRemove, onDblClick, onContextMenu, displayX, displayY, viewScaleMultiplier = 1.0,
+  item, isSelected, isTransforming, tool, status, onSelect, onUpdate, onRemove, onDblClick, onContextMenu, displayX, displayY, viewScaleMultiplier = 1.0, visible = true, ghost = false,
 }: {
   item: BoardItem;
   isSelected: boolean;
   isTransforming: boolean;
   tool: Tool;
-  status: "normal" | "dead" | "planting";
+  status: "normal" | "dead" | "planting" | undefined;
   onSelect: (id: string | null) => void;
   onUpdate: (id: string, updates: Partial<BoardItem>) => void;
   onRemove: (id: string) => void;
@@ -503,6 +544,10 @@ function OperatorToken({
   displayX: number;
   displayY: number;
   viewScaleMultiplier?: number;
+  /** When false the token stays mounted (preserving the cached SVG image) but is hidden. */
+  visible?: boolean;
+  /** When true the token is rendered at 30% opacity with pointer events disabled (cross-floor ghost). */
+  ghost?: boolean;
 }) {
   const image    = useOperatorIcon(item.iconPath);
   const groupRef = useRef<Konva.Group>(null);
@@ -531,9 +576,10 @@ function OperatorToken({
         rotation={item.rotation}
         scaleX={item.scaleX}
         scaleY={item.scaleY}
-        opacity={status === "dead" ? 0.5 : 1}
-        draggable={tool === "cursor"}
-        listening={interactive}
+        opacity={ghost ? 0.3 : status === "dead" ? 0.5 : 1}
+        visible={visible || ghost}
+        draggable={tool === "cursor" && visible && !ghost}
+        listening={interactive && !ghost}
         onContextMenu={(e) => {
           e.evt.preventDefault();
           onContextMenu(item.id, e.evt.clientX, e.evt.clientY);
@@ -641,8 +687,8 @@ function OperatorToken({
         )}
       </KonvaGroup>
 
-      {/* Per-item transformer — only shown on double-click, not single-click */}
-      {isTransforming && (
+      {/* Per-item transformer — only shown on double-click, not single-click, and only when visible */}
+      {isTransforming && visible && (
         <Transformer
           ref={trRef}
           rotateEnabled
@@ -665,10 +711,12 @@ function OperatorToken({
 
 export default function MainCanvas({
   isLeftOpen = true,
+  leftPanelWidth = 0,
   onToggleLeft,
   onResetWorkspace,
 }: {
   isLeftOpen?: boolean;
+  leftPanelWidth?: number;
   onToggleLeft?: () => void;
   onResetWorkspace?: () => void;
 }) {
@@ -694,8 +742,16 @@ export default function MainCanvas({
   })));
 
   // ── Settings store ─────────────────────────────────────────────────────────
-  const { isRightSidebarOpen, toggleRightSidebar, language, isAdvancedMode } = useSettingsStore(
-    useShallow((s) => ({ isRightSidebarOpen: s.isRightSidebarOpen, toggleRightSidebar: s.toggleRightSidebar, language: s.language, isAdvancedMode: s.isAdvancedMode })),
+  const { isRightSidebarOpen, toggleRightSidebar, language, isAdvancedMode, isAiModeEnabled, rightSidebarTab, setRightSidebarTab } = useSettingsStore(
+    useShallow((s) => ({
+      isRightSidebarOpen: s.isRightSidebarOpen,
+      toggleRightSidebar: s.toggleRightSidebar,
+      language: s.language,
+      isAdvancedMode: s.isAdvancedMode,
+      isAiModeEnabled: s.isAiModeEnabled,
+      rightSidebarTab: s.rightSidebarTab,
+      setRightSidebarTab: s.setRightSidebarTab,
+    })),
   );
 
   // ── Project store (save) ───────────────────────────────────────────────────
@@ -730,8 +786,12 @@ export default function MainCanvas({
     addRoomLabel, updateRoomLabel, removeRoomLabel,
     setRouteStepStatus,
     isPlaying, setIsPlaying,
+    hiddenOperators,
+    routeTimeMap,
+    isPlayingTimeline,
+    playbackRowIndex,
     undo,
-    currentPhase, setPhase,
+    currentPhase, setPhase, switchPhase,
     setResizingItemId,
     transformingItemId, setTransformingItemId,
   } = useBoardStore(useShallow((s) => ({
@@ -757,8 +817,12 @@ export default function MainCanvas({
     addRoomLabel: s.addRoomLabel, updateRoomLabel: s.updateRoomLabel, removeRoomLabel: s.removeRoomLabel,
     setRouteStepStatus: s.setRouteStepStatus,
     isPlaying: s.isPlaying, setIsPlaying: s.setIsPlaying,
+    hiddenOperators: s.hiddenOperators,
+    routeTimeMap: s.routeTimeMap,
+    isPlayingTimeline: s.isPlayingTimeline,
+    playbackRowIndex: s.playbackRowIndex,
     undo: s.undo,
-    currentPhase: s.currentPhase, setPhase: s.setPhase,
+    currentPhase: s.currentPhase, setPhase: s.setPhase, switchPhase: s.switchPhase,
     setResizingItemId: s.setResizingItemId,
     transformingItemId: s.transformingItemId, setTransformingItemId: s.setTransformingItemId,
   })));
@@ -770,17 +834,17 @@ export default function MainCanvas({
   const [activeRoomEdit, setActiveRoomEdit] = useState<{ id: string; x: number; y: number; text: string; screenX: number; screenY: number } | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ itemId: string; x: number; y: number } | null>(null);
 
-  // Wrapper: reset route step and clear resize mode when switching operators
+  // Wrapper: clear resize/transform mode when switching operators
+  // NOTE: does NOT reset currentRouteStep — step resets only on floor/phase switch
   const handleSelectOperator = useCallback((id: string | null) => {
     setSelectedId((prev) => {
       if (id !== prev) {
-        setCurrentRouteStep(1);
         setResizingItemId(null);
         setTransformingItemId(null);
       }
       return id;
     });
-  }, [setCurrentRouteStep, setResizingItemId, setTransformingItemId]);
+  }, [setResizingItemId, setTransformingItemId]);
   const handleContextMenu = useCallback((itemId: string, clientX: number, clientY: number) => {
     setCtxMenu({ itemId, x: clientX, y: clientY });
   }, []);
@@ -794,7 +858,6 @@ export default function MainCanvas({
   const [zoomPercent, setZoomPercent]     = useState(100);
   const [containerSize, setContainerSize] = useState<Size>({ width: 0, height: 0 });
   const [isExporting,   setIsExporting]   = useState(false);
-  const [phaseOpen,     setPhaseOpen]     = useState(false);
   const [isExportingGif, setIsExportingGif] = useState(false);
 
   // ── Blueprint transform — lifted from MapImageLayer so items co-transform ──
@@ -839,7 +902,7 @@ export default function MainCanvas({
   const stageRef        = useRef<Konva.Stage>(null);
   const containerRef    = useRef<HTMLDivElement>(null);
   const resizeTimerRef  = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const phaseRef        = useRef<HTMLDivElement>(null);
+
 
   // Derived
   const floor      = currentFloor();
@@ -1202,14 +1265,19 @@ export default function MainCanvas({
     return () => clearInterval(id);
   }, [isPlaying, setCurrentRouteStep]);
 
-  // Close export menu, phase popover, and context menu on outside click
+  // ── Timeline playback start: deselect operator and reset to cursor tool ──────
+  useEffect(() => {
+    if (isPlayingTimeline) {
+      setTool("cursor");
+      setSelectedId(null);
+    }
+  }, [isPlayingTimeline, setTool]);
+
+  // Close export menu and context menu on outside click
   useEffect(() => {
     const close = (e: MouseEvent) => {
       if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
         setIsExportOpen(false);
-      }
-      if (phaseRef.current && !phaseRef.current.contains(e.target as Node)) {
-        setPhaseOpen(false);
       }
       setCtxMenu(null);
     };
@@ -1242,14 +1310,17 @@ export default function MainCanvas({
     const board  = useBoardStore.getState();
     const canvas = useCanvasStore.getState();
     const data = {
-      mapId:         canvas.currentMapId,
-      floorId:       canvas.currentFloorId,
-      items:         board.items,
-      lines:         board.lines,
+      version: "1.2",
+      mapId:          canvas.currentMapId,
+      floorId:        canvas.currentFloorId,
+      items:          board.items,
+      lines:          board.lines,
       throwableLines: board.throwableLines,
-      texts:         board.texts,
-      notes:         board.notes,
-      exportedAt:    Date.now(),
+      texts:          board.texts,
+      notes:          board.notes,
+      routeTimeMap:   board.routeTimeMap,
+      hiddenOperators: board.hiddenOperators,
+      exportedAt:     Date.now(),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url  = URL.createObjectURL(blob);
@@ -1783,14 +1854,28 @@ export default function MainCanvas({
           />
         )}
 
-        {/* Placed operator tokens — rendered at effective route position for currentRouteStep */}
+        {/* Placed operator tokens — rendered at effective route position for current step.
+            Floor visibility is checked per-step so operators can move between floors. */}
         {(() => {
           const viewScaleMultiplier = (currentView === "isometric" ? 0.4 : 1.0) / bpScale;
           return items
-            .filter((i) => i.phase === currentPhase && i.floorId === currentFloorId)
+            .filter((i) => i.phase === currentPhase)                            // phase scoped
+            .filter((i) => !hiddenOperators.includes(i.id))
             .filter((i) => !isExportingGif || exportVisibility === "all" || i.side === "neutral" || i.side === exportVisibility)
             .map((item) => {
             const eff = getEffectiveRoute(item);
+
+            // Determine active step (snap during timeline, currentRouteStep otherwise)
+            const activeStep = isPlayingTimeline
+              ? (Math.max(1, getSnapPositionAtTimelineRow(item, playbackRowIndex, routeTimeMap).step) as 1 | 2 | 3 | 4 | 5)
+              : currentRouteStep;
+
+            const activePoint = eff[activeStep];
+            // Stay mounted on every floor so the cached SVG image isn't discarded.
+            // Visibility is toggled via Konva's visible prop (no unmount = no reload flash).
+            const isVisible = activePoint.floorId === currentFloorId;
+            const isGhost = !isVisible && item.id === selectedId && tool === "route";
+
             return (
               <OperatorToken
                 key={item.id}
@@ -1798,47 +1883,74 @@ export default function MainCanvas({
                 isSelected={item.id === selectedId}
                 isTransforming={item.id === transformingItemId}
                 tool={tool}
-                status={eff[currentRouteStep].status}
+                status={activePoint.status}
                 onSelect={handleSelectOperator}
                 onUpdate={updateItem}
                 onRemove={(id) => { removeItem(id); handleSelectOperator(null); setTransformingItemId(null); }}
                 onDblClick={(id) => { setResizingItemId(id); setTransformingItemId(id); }}
                 onContextMenu={handleContextMenu}
-                displayX={eff[currentRouteStep].x}
-                displayY={eff[currentRouteStep].y}
+                displayX={activePoint.x}
+                displayY={activePoint.y}
                 viewScaleMultiplier={viewScaleMultiplier}
+                visible={isVisible}
+                ghost={isGhost}
               />
             );
           });
         })()}
 
-        {/* Operator movement routes — hidden during GIF export; badges hide at current step */}
+        {/* Operator movement routes — floor-aware: only draw segments on the current floor */}
         {!isExportingGif && items
-          .filter((i) => i.phase === currentPhase && i.floorId === currentFloorId && Object.keys(i.route).length > 0)
+          .filter((i) => i.phase === currentPhase && Object.keys(i.route).length > 0)
+          .filter((i) => !hiddenOperators.includes(i.id))
           .map((item) => {
-          const eff          = getEffectiveRoute(item);
-          const upTo         = showFullRoute ? 5 : currentRouteStep;
-          const routePoints  = eff.slice(0, upTo + 1).flatMap((p) => [p.x, p.y]);
+          const eff            = getEffectiveRoute(item);
+          const upTo           = showFullRoute ? 5 : currentRouteStep;
           const isEraserActive = tool === "eraser";
+
+          // Split the route into same-floor arrow segments so cross-floor jumps are invisible
+          const arrowSegments: number[][] = [];
+          let seg: number[] = [];
+          for (let s = 0; s <= upTo; s++) {
+            const pt = eff[s];
+            if (pt.floorId === currentFloorId) {
+              seg.push(pt.x, pt.y);
+            } else {
+              if (seg.length >= 4) arrowSegments.push(seg);
+              seg = [];
+            }
+          }
+          if (seg.length >= 4) arrowSegments.push(seg);
+
+          // Step badges: only on the current floor, using effective (inherited) floorId
+          const visibleBadges = Object.entries(item.route)
+            .filter(([stepStr]) => {
+              const s = Number(stepStr);
+              return s <= upTo && s !== currentRouteStep && eff[s].floorId === currentFloorId;
+            });
+
+          if (arrowSegments.length === 0 && visibleBadges.length === 0) return null;
+
           return (
             <Fragment key={`route-${item.id}`}>
-              <Arrow
-                points={routePoints}
-                stroke="rgba(255,255,255,0.92)"
-                fill="rgba(255,255,255,0.92)"
-                strokeWidth={2.5}
-                pointerLength={10}
-                pointerWidth={8}
-                lineCap="round"
-                lineJoin="round"
-                tension={0}
-                hitStrokeWidth={14}
-                listening={isEraserActive}
-                onClick={() => { if (isEraserActive) clearRoute(item.id); }}
-              />
-              {Object.entries(item.route)
-                .filter(([stepStr]) => Number(stepStr) <= upTo && Number(stepStr) !== currentRouteStep)
-                .map(([stepStr, wp]) => {
+              {arrowSegments.map((pts, idx) => (
+                <Arrow
+                  key={idx}
+                  points={pts}
+                  stroke="rgba(255,255,255,0.92)"
+                  fill="rgba(255,255,255,0.92)"
+                  strokeWidth={2.5}
+                  pointerLength={10}
+                  pointerWidth={8}
+                  lineCap="round"
+                  lineJoin="round"
+                  tension={0}
+                  hitStrokeWidth={14}
+                  listening={isEraserActive}
+                  onClick={() => { if (isEraserActive) clearRoute(item.id); }}
+                />
+              ))}
+              {visibleBadges.map(([stepStr, wp]) => {
                   const step = Number(stepStr);
                   return (
                     <Fragment key={step}>
@@ -1907,8 +2019,8 @@ export default function MainCanvas({
             />
           ))}
 
-        {/* 房间名称渲染 */}
-        {roomLabels
+        {/* 房间名称渲染 — only when "Room Names" overlay is active */}
+        {overlays.names && roomLabels
           .filter((rl) => rl.floorId === currentFloorId)
           .map((label) => (
             <KonvaText
@@ -1962,8 +2074,11 @@ export default function MainCanvas({
   return (
     <div className="relative flex flex-1 flex-col bg-r6-bg">
 
-      {/* ── Toolbar ─────────────────────────────────────────────────────────── */}
-      <div className="relative flex shrink-0 items-center gap-1 px-3 py-1.5 z-20 bg-r6-surface-glass border-b border-r6-border backdrop-blur-[10px]">
+      {/* ── Toolbar — fixed, starts at the right edge of the left panel ─────── */}
+      <div
+        className="fixed top-0 right-0 z-[100] flex items-center gap-1 px-3 py-1.5 bg-r6-surface-glass border-b border-r6-border backdrop-blur-[10px]"
+        style={{ left: leftPanelWidth, transition: "left 200ms ease" }}
+      >
         {/* Panel toggle + Reset workspace */}
         <ToolBtn
           icon={isLeftOpen ? PanelLeftClose : PanelLeftOpen}
@@ -1986,52 +2101,36 @@ export default function MainCanvas({
           <>
             <span className="text-[13px] text-r6-muted-2">›</span>
             <Dropdown value={currentFloorId} placeholder="…" items={floorItems}
-              onChange={(id) => setFloor(id)} minWidth={68} />
+              onChange={(id) => {
+                if (tool === "route" && selectedId !== null) {
+                  setFloor(id);
+                } else {
+                  setFloor(id); setCurrentRouteStep(1); setTool("cursor");
+                }
+              }} minWidth={68} />
           </>
         )}
 
-        {/* Phase selector */}
+        {/* Phase selector — arrow navigation */}
         {map && (
-          <div ref={phaseRef} className="relative shrink-0">
+          <div className="flex shrink-0 items-center rounded-lg border border-r6-border bg-r6-surface-2 overflow-hidden h-7">
             <button
-              onClick={() => setPhaseOpen((o) => !o)}
-              className={cn(
-                "flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[14px] font-medium border",
-                phaseOpen
-                  ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
-                  : "bg-r6-surface-2 text-r6-text border-r6-border"
-              )}
-              style={{ minWidth: 112 }}
+              onClick={() => setPhase(Math.max(1, currentPhase - 1))}
+              disabled={currentPhase <= 1}
+              className="flex items-center justify-center px-1.5 h-full text-r6-muted hover:text-r6-text hover:bg-r6-surface-3 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              <Flag size={13} className="opacity-70 shrink-0" />
-              <span className="flex-1 text-left truncate">{t(`phase_${currentPhase}`, language)}</span>
-              <ChevronDown size={12} className="opacity-50 shrink-0" />
+              <ChevronLeft size={14} />
             </button>
-            {/* Animated slide-down popover */}
-            <div
-              className="absolute left-0 top-[calc(100%+4px)] z-[60] rounded-xl py-1 bg-r6-surface border border-r6-border min-w-[170px]"
-              style={{
-                boxShadow: "0 8px 24px rgba(0,0,0,0.55)",
-                opacity: phaseOpen ? 1 : 0,
-                transform: phaseOpen ? "translateY(0)" : "translateY(-6px)",
-                pointerEvents: phaseOpen ? "auto" : "none",
-                transition: "opacity 0.15s ease, transform 0.15s ease",
-              }}
+            <span className="px-2 text-[13px] font-medium text-r6-text whitespace-nowrap select-none min-w-[88px] text-center">
+              {t(`phase_${currentPhase}`, language)}
+            </span>
+            <button
+              onClick={() => switchPhase(Math.min(4, currentPhase + 1), currentFloorId)}
+              disabled={currentPhase >= 4}
+              className="flex items-center justify-center px-1.5 h-full text-r6-muted hover:text-r6-text hover:bg-r6-surface-3 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              {([1, 2, 3, 4] as const).map((ph) => (
-                <button
-                  key={ph}
-                  onClick={() => { setPhase(ph); setPhaseOpen(false); }}
-                  className={cn(
-                    "flex w-full items-center justify-between gap-2 pl-4 pr-3 py-1.5 text-[14px] hover:bg-r6-surface-2 transition-colors",
-                    ph === currentPhase ? "text-r6-accent" : "text-r6-text"
-                  )}
-                >
-                  <span>{t(`phase_${ph}`, language)}</span>
-                  {ph === currentPhase && <span className="text-r6-accent">✓</span>}
-                </button>
-              ))}
-            </div>
+              <ChevronRight size={14} />
+            </button>
           </div>
         )}
 
@@ -2071,7 +2170,7 @@ export default function MainCanvas({
             <ToolBtn icon={Layers2}     label="Verticality"  active={overlays.vert}   disabled={!floor?.images.verticality}                              onClick={() => toggleOverlay("vert"   as OverlayKey)} />
             <ToolBtn icon={Box}         label="Props"        active={overlays.props}  disabled={!floor?.images.props}                                    onClick={() => toggleOverlay("props"  as OverlayKey)} />
             <ToolBtn icon={ArrowUpDown} label="Stairs"       active={overlays.stairs} disabled={!floor?.images.stairs}                                   onClick={() => toggleOverlay("stairs" as OverlayKey)} />
-            <ToolBtn icon={Type}        label="Room Names"   active={overlays.names}  disabled={!floor?.images.roomNames}                                onClick={() => toggleOverlay("names"  as OverlayKey)} />
+            <ToolBtn icon={Type}        label="Room Names"   active={overlays.names}  disabled={!floor?.images.roomNames && roomLabels.filter((rl) => rl.floorId === currentFloorId).length === 0}  onClick={() => toggleOverlay("names"  as OverlayKey)} />
           </>
         )}
 
@@ -2108,19 +2207,49 @@ export default function MainCanvas({
           <Video size={14} />
         </button>
 
-        {/* AI / Notes toggle — icon-only */}
+        {/* Timeline toggle */}
         <button
-          title="Toggle AI &amp; Notes panel"
-          onClick={toggleRightSidebar}
+          title="Toggle Timeline"
+          onClick={() => {
+            if (!isRightSidebarOpen || rightSidebarTab !== "timeline") {
+              setRightSidebarTab("timeline");
+              if (!isRightSidebarOpen) toggleRightSidebar();
+            } else {
+              toggleRightSidebar();
+            }
+          }}
           className={cn(
             "flex shrink-0 h-7 w-7 items-center justify-center rounded-lg border transition-colors",
-            isRightSidebarOpen
+            isRightSidebarOpen && rightSidebarTab === "timeline"
               ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
               : "bg-r6-surface-2 text-r6-muted border-r6-border hover:bg-r6-accent-dim hover:text-r6-accent hover:border-r6-accent"
           )}
         >
-          <Bot size={14} />
+          <TableProperties size={14} />
         </button>
+
+        {/* AI assistant toggle — only shown when AI mode is enabled */}
+        {isAiModeEnabled && (
+          <button
+            title="Toggle AI Assistant"
+            onClick={() => {
+              if (!isRightSidebarOpen || rightSidebarTab !== "ai") {
+                setRightSidebarTab("ai");
+                if (!isRightSidebarOpen) toggleRightSidebar();
+              } else {
+                toggleRightSidebar();
+              }
+            }}
+            className={cn(
+              "flex shrink-0 h-7 w-7 items-center justify-center rounded-lg border transition-colors",
+              isRightSidebarOpen && rightSidebarTab === "ai"
+                ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
+                : "bg-r6-surface-2 text-r6-muted border-r6-border hover:bg-r6-accent-dim hover:text-r6-accent hover:border-r6-accent"
+            )}
+          >
+            <Bot size={14} />
+          </button>
+        )}
 
         {/* Save project — icon-only */}
         <button
@@ -2209,6 +2338,9 @@ export default function MainCanvas({
           )}
         </div>
       </div>
+
+      {/* Spacer — reserves the toolbar's height in the flex flow */}
+      <div className="shrink-0" style={{ height: 41 }} />
 
       {/* Hidden JSON import input */}
       <input
