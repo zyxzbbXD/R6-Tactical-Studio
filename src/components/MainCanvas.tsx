@@ -390,7 +390,7 @@ function Dropdown<T extends string>({
 // Stacking order: base → props → stairs → vert → names
 
 const MapImageLayer = memo(function MapImageLayer({
-  basePath, vertPath, propsPath, stairsPath, namesPath, currentView, currentMapId, blueprintScaleMode, onCenterCalculated,
+  basePath, vertPath, propsPath, stairsPath, namesPath, currentView, currentMapId, blueprintScaleMode, onCenterCalculated, externalCenter,
 }: {
   basePath: string;
   vertPath: string;
@@ -401,6 +401,7 @@ const MapImageLayer = memo(function MapImageLayer({
   currentMapId: string;
   blueprintScaleMode: "default" | "standard";
   onCenterCalculated?: (center: { x: number; y: number }) => void;
+  externalCenter?: { x: number; y: number };
 }) {
   const [baseImage]   = useImage(basePath);
   const [vertImage]   = useImage(vertPath);
@@ -452,12 +453,16 @@ const MapImageLayer = memo(function MapImageLayer({
   if (!baseImage) return null;
   const isBlueprint = currentView === "blueprint";
 
-  // "standard": scale image by dict factor, pivot on the detected building center → places
-  //             building at canvas midpoint (3200, 1800). Stage is NEVER touched.
-  // "default":  raw 1:1 at (0,0).
+  // "standard": scale image by dict factor, pivot on building center → places building at (3200,1800).
+  // For non-blueprint views the externally-supplied blueprint center is used as the pivot so
+  // both the map image and the items group share the same transform.
   const blueprintManualScale = BLUEPRINT_MANUAL_SCALES[currentMapId] ?? 1.0;
-  const center = buildingCenter ?? { x: baseImage.naturalWidth / 2, y: baseImage.naturalHeight / 2 };
-  const imgProps = isBlueprint && blueprintScaleMode === "standard"
+  const internalCenter = buildingCenter ?? { x: baseImage.naturalWidth / 2, y: baseImage.naturalHeight / 2 };
+  // In blueprint view: use the locally-computed center (from alpha-scan of the blueprint PNG).
+  // In other views: use the passed-in blueprint center so both layers pivot at the same point.
+  const center = (!isBlueprint && externalCenter) ? externalCenter : internalCenter;
+  const applyScale = blueprintScaleMode === "standard" && (isBlueprint || externalCenter != null);
+  const imgProps = applyScale
     ? { x: 3200, y: 1800, offsetX: center.x, offsetY: center.y, scaleX: blueprintManualScale, scaleY: blueprintManualScale }
     : { x: 0,    y: 0,    offsetX: 0,        offsetY: 0,        scaleX: 1,                    scaleY: 1                    };
 
@@ -793,18 +798,32 @@ export default function MainCanvas({
   const [isExportingGif, setIsExportingGif] = useState(false);
 
   // ── Blueprint transform — lifted from MapImageLayer so items co-transform ──
-  // buildingCenter is the pixel bounding-box center of the blueprint image,
-  // calculated by MapImageLayer and reported upward via onCenterCalculated.
+  // buildingCenter: updated from whichever image is currently loaded.
+  // blueprintCenter: only updated when the blueprint image is scanned — persists across view switches
+  //                  so the same pivot is reused on the standard map view.
   const [buildingCenter, setBuildingCenter] = useState<{ x: number; y: number } | null>(null);
-  // Reset when the map or floor changes so stale center from prior image isn't used.
-  useEffect(() => { setBuildingCenter(null); }, [currentMapId, currentFloorId]);
+  const [blueprintCenter, setBlueprintCenter] = useState<{ x: number; y: number } | null>(null);
+  // Reset both on map/floor change.
+  useEffect(() => { setBuildingCenter(null); setBlueprintCenter(null); }, [currentMapId, currentFloorId]);
 
-  const isStandardBp = currentView === "blueprint" && blueprintScaleMode === "standard";
-  const bpScale   = isStandardBp ? (BLUEPRINT_MANUAL_SCALES[currentMapId ?? ""] ?? 1.0) : 1.0;
-  const bpOffsetX = buildingCenter?.x ?? 0;
-  const bpOffsetY = buildingCenter?.y ?? 0;
+  // Stable callback ref so MapImageLayer (memo) doesn't re-render just because currentView changed.
+  const currentViewRef = useRef(currentView);
+  currentViewRef.current = currentView;
+  const handleCenterCalculated = useCallback((center: { x: number; y: number }) => {
+    setBuildingCenter(center);
+    // Only promote to blueprintCenter when scanned from the blueprint image.
+    if (currentViewRef.current === "blueprint") setBlueprintCenter(center);
+  }, []);
+
+  // Effective pivot: prefer the blueprint-image center; fall back to whatever was computed last.
+  const effectiveCenter = blueprintCenter ?? buildingCenter;
+  const isStandardScale = blueprintScaleMode === "standard";
+  // Transform is active for ALL views once we have a pivot, not just blueprint view.
+  const isStandardBp = isStandardScale && effectiveCenter != null;
+  const bpScale   = isStandardScale ? (BLUEPRINT_MANUAL_SCALES[currentMapId ?? ""] ?? 1.0) : 1.0;
+  const bpOffsetX = effectiveCenter?.x ?? 0;
+  const bpOffsetY = effectiveCenter?.y ?? 0;
   // Shared Konva transform applied to BOTH the image layer and the items Group.
-  // In "default" mode this is identity — no visual change.
   const bpTransformProps = isStandardBp
     ? { x: 3200, y: 1800, offsetX: bpOffsetX, offsetY: bpOffsetY, scaleX: bpScale, scaleY: bpScale }
     : { x: 0,    y: 0,    offsetX: 0,         offsetY: 0,         scaleX: 1,       scaleY: 1       };
@@ -916,16 +935,26 @@ export default function MainCanvas({
       if (!selectedId) return;
       if (texts.some((t) => t.id === selectedId)) {
         removeText(selectedId);
+        setSelectedId(null);
       } else if (roomLabels.some((rl) => rl.id === selectedId)) {
         removeRoomLabel(selectedId);
+        setSelectedId(null);
+      } else if (tool === "route") {
+        // In route mode: remove only the current step waypoint, not the whole operator
+        const item = items.find((i) => i.id === selectedId);
+        if (item && (item.route as Record<number, unknown>)[currentRouteStep]) {
+          const newRoute = { ...item.route } as Record<number, unknown>;
+          delete newRoute[currentRouteStep];
+          updateItem(selectedId, { route: newRoute as BoardItem["route"] });
+        }
       } else {
         removeItem(selectedId);
+        setSelectedId(null);
       }
-      setSelectedId(null);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [selectedId, removeItem, removeText, removeRoomLabel, texts, roomLabels]);
+  }, [selectedId, tool, currentRouteStep, items, removeItem, updateItem, removeText, removeRoomLabel, texts, roomLabels]);
 
   // ── Keyboard shortcuts for tool switching + route step 1–5 ───────────────
   useEffect(() => {
@@ -1163,6 +1192,7 @@ export default function MainCanvas({
   playStepRef.current = currentRouteStep;
   useEffect(() => {
     if (!isPlaying) return;
+    setCurrentRouteStep(1);
     const id = setInterval(() => {
       const next = playStepRef.current < 5
         ? ((playStepRef.current + 1) as 1 | 2 | 3 | 4 | 5)
@@ -1457,8 +1487,12 @@ export default function MainCanvas({
         x: pos.x, y: pos.y,
         rotation: 0, scaleX: 1, scaleY: 1,
       });
-      // Keep tool + pendingOperator active for continuous multi-placement.
-      // User presses Escape or selects another tool to exit.
+      // Gadgets (side === "neutral") stay active for continuous placement.
+      // Operators (atk/def) reset to cursor after a single drop.
+      if (pendingOperator.side !== "neutral") {
+        setPendingOperator(null);
+        setTool("cursor");
+      }
       return;
     }
 
@@ -1633,7 +1667,8 @@ export default function MainCanvas({
                 currentView={currentView}
                 currentMapId={currentMapId ?? ""}
                 blueprintScaleMode={blueprintScaleMode}
-                onCenterCalculated={setBuildingCenter}
+                onCenterCalculated={handleCenterCalculated}
+                externalCenter={blueprintCenter ?? undefined}
               />
               {/* Blueprint legend */}
               {currentView === "blueprint" && (
@@ -1750,7 +1785,7 @@ export default function MainCanvas({
 
         {/* Placed operator tokens — rendered at effective route position for currentRouteStep */}
         {(() => {
-          const viewScaleMultiplier = currentView === "isometric" ? 0.4 : 1.0;
+          const viewScaleMultiplier = (currentView === "isometric" ? 0.4 : 1.0) / bpScale;
           return items
             .filter((i) => i.phase === currentPhase && i.floorId === currentFloorId)
             .filter((i) => !isExportingGif || exportVisibility === "all" || i.side === "neutral" || i.side === exportVisibility)
@@ -1881,7 +1916,7 @@ export default function MainCanvas({
               x={label.x}
               y={label.y}
               text={activeRoomEdit?.id === label.id ? "" : label.text}
-              fontSize={label.fontSize}
+              fontSize={label.fontSize / bpScale}
               fill={label.fill}
               stroke="rgba(0,0,0,0.85)"
               strokeWidth={4}
@@ -2016,8 +2051,8 @@ export default function MainCanvas({
               icon={ImageIcon}
               minWidth={108}
             />
-            {/* Blueprint scale mode toggle — only visible in blueprint view */}
-            {currentView === "blueprint" && (
+            {/* Blueprint scale mode toggle — always in blueprint view; in default view only after blueprint center has been computed */}
+            {(currentView === "blueprint" || (currentView === "default" && blueprintCenter !== null)) && (
               <ToolBtn
                 icon={blueprintScaleMode === "standard" ? ImageIcon : Maximize2}
                 label={t(blueprintScaleMode === "standard" ? "scale_default" : "scale_standard", language)}
