@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -27,6 +27,40 @@ const PHASE_LABELS: Record<string, string> = {
 
 // Rows where a thick divider appears (start of each action phase section)
 const PHASE_DIVIDER_ROWS = new Set([PHASE_START_ROW[2], PHASE_START_ROW[3], PHASE_START_ROW[4]]); // 5, 11, 16
+
+// Gadget IDs that remain on the map after deployment (show a continuous tail in the timeline).
+// Consumable/throwable gadgets are NOT listed here and show only the deploy icon.
+const CONTINUOUS_PROPS = new Set([
+  // Generic gadgets (deployable, stays on map)
+  "gadget-barb",
+  "gadget-barricade",
+  "gadget-reinforcement",
+  "gadget-proximity-mine",
+  "gadget-shield",
+  "gadget-rotation",
+  "gadget-defuser",
+  // Operator-specific deployables
+  "opgadget-azami",
+  "opgadget-bandit",
+  "opgadget-echo",
+  "opgadget-ela",
+  "opgadget-fenrir",
+  "opgadget-frost",
+  "opgadget-goyo",
+  "opgadget-grim",
+  "opgadget-jager",
+  "opgadget-kaid",
+  "opgadget-lesion",
+  "opgadget-maestro",
+  "opgadget-melusi",
+  "opgadget-mozzie",
+  "opgadget-mute",
+  "opgadget-nomad",
+  "opgadget-thunderbird",
+  "opgadget-valkyrie",
+  "opgadget-wamai",
+  "opgadget-zero",
+]);
 
 // ─── AI Timeline system prompt ─────────────────────────────────────────────────
 
@@ -180,7 +214,7 @@ export default function RightSidebar({
   })));
 
   // ── Local UI state ──────────────────────────────────────────────────────────
-  const [timelineSide,  setTimelineSide]  = useState<"atk" | "def">("atk");
+  const [timelineSide,  setTimelineSide]  = useState<"atk" | "def" | "neutral">("atk");
   const [inputText,     setInputText]     = useState("");
   const [isLoading,     setIsLoading]     = useState(false);
   const [error,         setError]         = useState<string | null>(null);
@@ -199,14 +233,61 @@ export default function RightSidebar({
   }, [isAiModeEnabled, rightSidebarTab, setRightSidebarTab]);
 
   // ── Derive the 5 operator columns for the selected side ────────────────────
-  const columnOps = (() => {
-    // Phase-scoped only — floor is intentionally ignored so operators remain
-    // pinned in the timeline columns even when viewing a different floor.
-    const sideItems = items
-      .filter((i) => i.side === timelineSide && i.phase === currentPhase)
-      .slice(0, 5);
-    return Array.from({ length: 5 }, (_, i) => sideItems[i] ?? null);
-  })();
+  // Phase-scoped only — floor is intentionally ignored so operators remain
+  // pinned in the timeline columns even when viewing a different floor.
+  // Map-based dedup ensures each operatorId gets exactly one column even if
+  // the user placed multiple tokens of the same operator on the canvas.
+  const columnOps = useMemo(() => {
+    const uniqueOps = new Map<string, typeof items[0]>();
+    for (const item of items) {
+      if (item.side === timelineSide && item.phase === currentPhase) {
+        if (!uniqueOps.has(item.operatorId)) {
+          uniqueOps.set(item.operatorId, item);
+        }
+      }
+    }
+    const sideItems = Array.from(uniqueOps.values());
+    if (timelineSide === "neutral") {
+      // Prop mode: at least 5 columns for visual consistency, no upper cap
+      return Array.from({ length: Math.max(5, sideItems.length) }, (_, i) => sideItems[i] ?? null) as Array<typeof items[0] | null>;
+    }
+    // Operator mode: hard cap at 5, pad with nulls
+    const sliced = sideItems.slice(0, 5);
+    return Array.from({ length: 5 }, (_, i) => sliced[i] ?? null) as Array<typeof items[0] | null>;
+  }, [items, timelineSide, currentPhase]);
+
+  // ── O(1) cell render map ────────────────────────────────────────────────────
+  // Pre-compute badge and tail status for every (opId × rowIdx) pair so the
+  // inner render loop does a single Map.get() instead of Object.entries loops.
+  // This memo only re-runs when operator assignments or timing mappings change —
+  // NOT on every playback tick, keeping the grid render cost near zero.
+  const cellRenderMap = useMemo(() => {
+    const map = new Map<string, { badge: string; isTail: boolean }>();
+    for (const op of columnOps) {
+      if (!op) continue;
+      const opMap = routeTimeMap[op.id] ?? {};
+      // Build reverse lookup: rowIdx → badge string
+      const rowToBadge = new Map<number, string>();
+      for (const [stepStr, mappedRow] of Object.entries(opMap)) {
+        if (mappedRow !== undefined) {
+          rowToBadge.set(
+            mappedRow as number,
+            op.side === "neutral" ? "↓" : (STEP_CIRCLE[Number(stepStr) - 1] ?? String(stepStr)),
+          );
+        }
+      }
+      const deployRow: number | undefined = op.side === "neutral" ? (opMap[1] as number | undefined) : undefined;
+      const isContinuous = op.side === "neutral" && CONTINUOUS_PROPS.has(op.operatorId);
+      for (let rowIdx = 0; rowIdx < TIMELINE_ROWS.length; rowIdx++) {
+        const badge = rowToBadge.get(rowIdx);
+        const isTail = isContinuous && deployRow !== undefined && rowIdx > deployRow && !badge;
+        if (badge !== undefined || isTail) {
+          map.set(`${op.id}-${rowIdx}`, { badge: badge ?? "", isTail });
+        }
+      }
+    }
+    return map;
+  }, [columnOps, routeTimeMap]);
 
   // Every row is mapped to a tactical phase so the canvas always stays in sync.
   // Row 0 is included so looping back restores phase 1.
@@ -259,13 +340,13 @@ export default function RightSidebar({
   };
 
   // ── Cell click: assign current route step to this (opId, rowIndex) ─────────
-  const handleCellClick = (opId: string, rowIndex: number) => {
+  const handleCellClick = (opId: string, rowIndex: number, forceStep?: number) => {
     // Only allow placement in the rows belonging to the current phase
     if (getPhaseForRow(rowIndex) !== currentPhase) return;
     const opMap = routeTimeMap[opId] ?? {};
     // If this row already has a step badge, do nothing (no accidental overwrite)
     if (Object.values(opMap).includes(rowIndex)) return;
-    setRouteTimeMapping(opId, currentRouteStep, rowIndex);
+    setRouteTimeMapping(opId, forceStep ?? currentRouteStep, rowIndex);
   };
 
   // ── AI call ─────────────────────────────────────────────────────────────────
@@ -342,7 +423,7 @@ export default function RightSidebar({
 
             {/* ── Controls bar ──────────────────────────────────────────── */}
             <div className="flex shrink-0 items-center gap-1.5 border-b border-r6-border px-2 py-1.5">
-              {/* ATK / DEF toggle */}
+              {/* ATK / DEF / PROP toggle */}
               {(["atk", "def"] as const).map((side) => (
                 <button
                   key={side}
@@ -359,6 +440,17 @@ export default function RightSidebar({
                   {side.toUpperCase()}
                 </button>
               ))}
+              <button
+                onClick={() => setTimelineSide("neutral")}
+                className={cn(
+                  "rounded px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider transition-colors",
+                  timelineSide === "neutral"
+                    ? "bg-amber-600/30 text-amber-300 border border-amber-500/40"
+                    : "bg-r6-surface-2 text-r6-muted border border-r6-border hover:text-r6-text"
+                )}
+              >
+                PROP
+              </button>
 
               <div className="ml-auto flex items-center gap-1">
                 {/* Reset */}
@@ -396,18 +488,21 @@ export default function RightSidebar({
             </div>
 
             {/* ── Grid ─────────────────────────────────────────────────── */}
-            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto">
+              {/* min-w-max wrapper ensures phase banners and data rows all stretch
+                  to the same full width as the header when scrolling horizontally */}
+              <div className="flex min-w-max flex-col">
               {/* Time-label width = 38px; each op column fills the rest (5 cols) */}
-              <div className="sticky top-0 z-10 flex border-b-2 border-r6-border bg-r6-surface">
-                {/* time label header cell */}
-                <div className="shrink-0 border-r border-r6-border" style={{ width: 38 }} />
+              <div className="sticky top-0 z-10 flex min-w-max border-b-2 border-r6-border bg-r6-surface">
+                {/* time label header cell — sticky left so it doesn't scroll away */}
+                <div className="sticky left-0 z-20 shrink-0 border-r border-r6-border bg-r6-surface" style={{ width: 38 }} />
                 {columnOps.map((op, ci) => (
                   <div
                     key={ci}
-                    className="flex flex-1 flex-col items-center gap-0.5 border-r border-r6-border py-1 last:border-r-0"
+                    className="flex min-w-[54px] shrink-0 flex-col items-center gap-0.5 border-r border-r6-border py-1 last:border-r-0"
                   >
                     <span className="text-[10px] font-bold tracking-widest text-r6-muted-2">
-                      {COL_LETTERS[ci]}
+                      {timelineSide === "neutral" ? `P${ci + 1}` : (COL_LETTERS[ci] ?? String(ci + 1))}
                     </span>
                     {op ? (
                       <>
@@ -448,7 +543,7 @@ export default function RightSidebar({
                     {phaseChanged && (
                       <div
                         className={cn(
-                          "flex items-center gap-1.5 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest",
+                          "flex min-w-max items-center gap-1.5 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest",
                           isNewPhase ? "border-t-2 border-r6-accent/40" : "",
                           row.timePhase === "prep"  && "bg-zinc-800/60 text-zinc-400",
                           row.timePhase === "early" && "bg-blue-950/60 text-blue-400",
@@ -464,19 +559,19 @@ export default function RightSidebar({
                     {/* Data row */}
                     <div
                       className={cn(
-                        "flex border-b transition-colors",
+                        "flex min-w-max border-b transition-colors",
                         isScanline
                           ? "bg-blue-900/50 border-blue-500/50"
                           : "border-r6-border hover:bg-r6-surface-2/40"
                       )}
                       style={{ height: 22 }}
                     >
-                      {/* Time label — double-click to jump scanline + sync phase */}
+                      {/* Time label — sticky left so the time column stays visible when scrolling */}
                       <div
                         onDoubleClick={() => handleJumpToRow(rowIdx)}
                         className={cn(
-                          "flex shrink-0 items-center justify-end border-r px-1 font-mono text-[9px] select-none cursor-pointer",
-                          isScanline ? "border-blue-500/50 text-blue-300" : "border-r6-border text-r6-muted-2 hover:text-r6-text"
+                          "sticky left-0 z-10 flex shrink-0 items-center justify-end border-r px-1 font-mono text-[9px] select-none cursor-pointer",
+                          isScanline ? "border-blue-500/50 bg-blue-900/50 text-blue-300" : "border-r6-border bg-r6-surface text-r6-muted-2 hover:text-r6-text"
                         )}
                         style={{ width: 38 }}
                         title="Double-click to jump here"
@@ -484,32 +579,33 @@ export default function RightSidebar({
                         {row.label}
                       </div>
 
-                      {/* Operator cells */}
+                      {/* Operator / Prop cells */}
                       {columnOps.map((op, ci) => {
-                        // Find which step (if any) maps to this row for this operator
-                        let badge: string | null = null;
-                        if (op) {
-                          const opMap = routeTimeMap[op.id] ?? {};
-                          for (const [stepStr, mappedRow] of Object.entries(opMap)) {
-                            if (mappedRow === rowIdx) {
-                              badge = STEP_CIRCLE[Number(stepStr) - 1] ?? String(stepStr);
-                              break;
-                            }
-                          }
-                        }
+                        // O(1) lookup — all badge/tail logic is pre-computed in cellRenderMap
+                        const cellInfo = op ? cellRenderMap.get(`${op.id}-${rowIdx}`) : undefined;
+                        const badge = cellInfo?.badge ?? null;
+                        const isActivePropTail = cellInfo?.isTail ?? false;
 
                         return (
                           <div
                             key={ci}
-                            onClick={() => op && handleCellClick(op.id, rowIdx)}
+                            onClick={() => {
+                              if (!op) return;
+                              // Gadgets always bind to step 1 (deploy event)
+                              handleCellClick(op.id, rowIdx, op.side === "neutral" ? 1 : undefined);
+                            }}
                             className={cn(
-                              "flex flex-1 items-center justify-center border-r text-[12px] last:border-r-0",
+                              "relative flex min-w-[54px] shrink-0 items-center justify-center border-r text-[12px] last:border-r-0",
                               isScanline ? "border-blue-500/30" : "border-r6-border",
                               op ? "cursor-pointer" : "cursor-default",
-                              op && !badge && "hover:bg-r6-surface-3/50"
+                              op && !badge && !isActivePropTail && "hover:bg-r6-surface-3/50",
+                              isActivePropTail && "bg-amber-500/5"
                             )}
                           >
-                            {badge ? (
+                            {isActivePropTail ? (
+                              // Vertical tail bar — thin amber line centred in the cell
+                              <span className="absolute inset-y-0 left-1/2 w-[2px] -translate-x-1/2 rounded-full bg-amber-500/30" />
+                            ) : badge ? (
                               <span
                                 className={cn(
                                   "font-bold leading-none",
@@ -531,6 +627,7 @@ export default function RightSidebar({
 
               {/* Bottom spacer */}
               <div className="h-4" />
+              </div>{/* end min-w-max wrapper */}
             </div>
 
             {/* ── Step assignment hint ─────────────────────────────────── */}

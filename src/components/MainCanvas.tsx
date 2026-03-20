@@ -529,7 +529,7 @@ const MapImageLayer = memo(function MapImageLayer({
 // ─── Placed operator token ─────────────────────────────────────────────────────
 
 function OperatorToken({
-  item, isSelected, isTransforming, tool, status, onSelect, onUpdate, onRemove, onDblClick, onContextMenu, displayX, displayY, viewScaleMultiplier = 1.0, visible = true, ghost = false,
+  item, isSelected, isTransforming, tool, status, onSelect, onUpdate, onRemove, onDblClick, onContextMenu, displayX, displayY, viewScaleMultiplier = 1.0, visible = true, ghost = false, ghostFloorLabel,
 }: {
   item: BoardItem;
   isSelected: boolean;
@@ -546,8 +546,10 @@ function OperatorToken({
   viewScaleMultiplier?: number;
   /** When false the token stays mounted (preserving the cached SVG image) but is hidden. */
   visible?: boolean;
-  /** When true the token is rendered at 30% opacity with pointer events disabled (cross-floor ghost). */
+  /** When true the token is rendered at 25% opacity with pointer events disabled (cross-floor ghost). */
   ghost?: boolean;
+  /** Short floor label shown beneath the ghost icon so users know which floor the operator is on. */
+  ghostFloorLabel?: string;
 }) {
   const image    = useOperatorIcon(item.iconPath);
   const groupRef = useRef<Konva.Group>(null);
@@ -576,7 +578,7 @@ function OperatorToken({
         rotation={item.rotation}
         scaleX={item.scaleX}
         scaleY={item.scaleY}
-        opacity={ghost ? 0.3 : status === "dead" ? 0.5 : 1}
+        opacity={ghost ? 0.25 : status === "dead" ? 0.5 : 1}
         visible={visible || ghost}
         draggable={tool === "cursor" && visible && !ghost}
         listening={interactive && !ghost}
@@ -685,6 +687,24 @@ function OperatorToken({
             />
           </>
         )}
+
+        {/* Ghost floor label — shown below the circle when operator is on a different floor */}
+        {ghost && ghostFloorLabel && (
+          <KonvaText
+            x={0}
+            y={tokenSize + 2}
+            width={tokenSize}
+            text={ghostFloorLabel}
+            fontSize={Math.max(8, Math.round(tokenSize * 0.17))}
+            fontStyle="bold"
+            fill="#94a3b8"
+            stroke="rgba(0,0,0,0.7)"
+            strokeWidth={2}
+            fillAfterStrokeEnabled
+            align="center"
+            listening={false}
+          />
+        )}
       </KonvaGroup>
 
       {/* Per-item transformer — only shown on double-click, not single-click, and only when visible */}
@@ -706,6 +726,97 @@ function OperatorToken({
     </>
   );
 }
+
+// ─── Memoized operator node ────────────────────────────────────────────────────
+// Lives outside staticLayers so timeline playback (playbackRowIndex changes)
+// triggers re-renders here without busting the large static-layers memo.
+
+const MemoizedOperatorNode = memo(function MemoizedOperatorNode({
+  item,
+  tool,
+  selectedId,
+  transformingItemId,
+  currentFloorId,
+  isPlayingTimeline,
+  currentRouteStep,
+  playbackRowIndex,
+  routeTimeMap,
+  viewScaleMultiplier,
+  floorLabelMap,
+  handleSelectOperator,
+  updateItem,
+  removeItem,
+  handleContextMenu,
+  setResizingItemId,
+  setTransformingItemId,
+}: {
+  item: BoardItem;
+  tool: Tool;
+  selectedId: string | null;
+  transformingItemId: string | null;
+  currentFloorId: string | null;
+  isPlayingTimeline: boolean;
+  currentRouteStep: 1 | 2 | 3 | 4 | 5;
+  playbackRowIndex: number;
+  routeTimeMap: Record<string, Record<number, number>>;
+  viewScaleMultiplier: number;
+  /** floorId → short label (e.g. "2F") for the ghost floor badge. */
+  floorLabelMap: Record<string, string>;
+  handleSelectOperator: (id: string | null) => void;
+  updateItem: (id: string, updates: Partial<BoardItem>) => void;
+  removeItem: (id: string) => void;
+  handleContextMenu: (id: string, clientX: number, clientY: number) => void;
+  setResizingItemId: (id: string | null) => void;
+  setTransformingItemId: (id: string | null) => void;
+}) {
+  // Cache route computation; only recalculate when the item's position/route changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const eff = useMemo(() => getEffectiveRoute(item), [item.route, item.x, item.y, item.floorId]);
+
+  const activeStep = isPlayingTimeline
+    ? (Math.max(1, getSnapPositionAtTimelineRow(item, playbackRowIndex, routeTimeMap).step) as 1 | 2 | 3 | 4 | 5)
+    : currentRouteStep;
+
+  const activePoint      = eff[activeStep];
+  const isOnCurrentFloor = activePoint.floorId === currentFloorId;
+
+  // Default: always mounted and visible; ghost flag controls cross-floor dimming.
+  let tokenVisible = true;
+  let isGhost      = !isOnCurrentFloor;
+
+  // Gadget deploy-time visibility: completely hidden until the scanline reaches
+  // the row the user assigned as the deploy point (always step 1 for gadgets).
+  if (item.side === "neutral" && isPlayingTimeline) {
+    const deployRow = routeTimeMap[item.id]?.[1];
+    if (deployRow !== undefined && playbackRowIndex < deployRow) {
+      tokenVisible = false;
+      isGhost      = false; // not a ghost — just not deployed yet
+    }
+  }
+
+  const ghostFloorLabel = isGhost ? (floorLabelMap[activePoint.floorId ?? ""] ?? "") : undefined;
+
+  return (
+    <OperatorToken
+      item={item}
+      isSelected={item.id === selectedId}
+      isTransforming={item.id === transformingItemId}
+      tool={tool}
+      status={activePoint.status}
+      onSelect={handleSelectOperator}
+      onUpdate={updateItem}
+      onRemove={(id) => { removeItem(id); handleSelectOperator(null); setTransformingItemId(null); }}
+      onDblClick={(id) => { setResizingItemId(id); setTransformingItemId(id); }}
+      onContextMenu={handleContextMenu}
+      displayX={activePoint.x}
+      displayY={activePoint.y}
+      viewScaleMultiplier={viewScaleMultiplier}
+      visible={tokenVisible}
+      ghost={isGhost}
+      ghostFloorLabel={ghostFloorLabel}
+    />
+  );
+});
 
 // ─── Main component ────────────────────────────────────────────────────────────
 
@@ -1715,7 +1826,7 @@ export default function MainCanvas({
   // ── Memoized Stage layers — excluded from zoomPercent re-renders ──────────
   // When only zoomPercent changes (e.g. wheel scroll), these layers return
   // the same object reference so React skips reconciling the entire Konva tree.
-  const stageLayers = useMemo(() => (
+  const staticLayers = useMemo(() => (
     <>
       {/* Layer 0 — active floor map background only. All floors are pre-cached by
           the HTML <MapPreloader> so use-image resolves from RAM in 0ms on floor
@@ -1813,91 +1924,6 @@ export default function MainCanvas({
             onClick={() => { if (tool === "eraser") removeThrowableLine(tl.id); }}
           />
         ))}
-
-        {/* Live preview while drawing */}
-        {liveShape && liveShape.type === "arrow" && (
-          <Arrow
-            points={liveShape.points}
-            stroke={brushColor}
-            fill={brushColor}
-            strokeWidth={brushSize}
-            pointerLength={12}
-            pointerWidth={10}
-            lineCap="round"
-            listening={false}
-            opacity={0.75}
-          />
-        )}
-        {liveShape && liveShape.type === "line" && (
-          <Line
-            points={liveShape.points}
-            stroke={brushColor}
-            strokeWidth={brushSize}
-            lineCap="round"
-            lineJoin="round"
-            tension={0.4}
-            listening={false}
-            opacity={0.75}
-          />
-        )}
-        {liveShape && liveShape.type === "throwable" && (
-          <Line
-            points={liveShape.points}
-            stroke={throwableColor}
-            strokeWidth={throwableSize}
-            dash={[10, 8]}
-            tension={0.4}
-            lineCap="round"
-            lineJoin="round"
-            listening={false}
-            opacity={0.75}
-          />
-        )}
-
-        {/* Placed operator tokens — rendered at effective route position for current step.
-            Floor visibility is checked per-step so operators can move between floors. */}
-        {(() => {
-          const viewScaleMultiplier = (currentView === "isometric" ? 0.4 : 1.0) / bpScale;
-          return items
-            .filter((i) => i.phase === currentPhase)                            // phase scoped
-            .filter((i) => !hiddenOperators.includes(i.id))
-            .filter((i) => !isExportingGif || exportVisibility === "all" || i.side === "neutral" || i.side === exportVisibility)
-            .map((item) => {
-            const eff = getEffectiveRoute(item);
-
-            // Determine active step (snap during timeline, currentRouteStep otherwise)
-            const activeStep = isPlayingTimeline
-              ? (Math.max(1, getSnapPositionAtTimelineRow(item, playbackRowIndex, routeTimeMap).step) as 1 | 2 | 3 | 4 | 5)
-              : currentRouteStep;
-
-            const activePoint = eff[activeStep];
-            // Stay mounted on every floor so the cached SVG image isn't discarded.
-            // Visibility is toggled via Konva's visible prop (no unmount = no reload flash).
-            const isVisible = activePoint.floorId === currentFloorId;
-            const isGhost = !isVisible && item.id === selectedId && tool === "route";
-
-            return (
-              <OperatorToken
-                key={item.id}
-                item={item}
-                isSelected={item.id === selectedId}
-                isTransforming={item.id === transformingItemId}
-                tool={tool}
-                status={activePoint.status}
-                onSelect={handleSelectOperator}
-                onUpdate={updateItem}
-                onRemove={(id) => { removeItem(id); handleSelectOperator(null); setTransformingItemId(null); }}
-                onDblClick={(id) => { setResizingItemId(id); setTransformingItemId(id); }}
-                onContextMenu={handleContextMenu}
-                displayX={activePoint.x}
-                displayY={activePoint.y}
-                viewScaleMultiplier={viewScaleMultiplier}
-                visible={isVisible}
-                ghost={isGhost}
-              />
-            );
-          });
-        })()}
 
         {/* Operator movement routes — floor-aware: only draw segments on the current floor */}
         {!isExportingGif && items
@@ -2062,11 +2088,9 @@ export default function MainCanvas({
   ), [map, floor, currentFloorId, overlays, currentView, currentMapId, blueprintScaleMode,
       bpTransformProps, setBuildingCenter,
       lines, throwableLines, currentPhase, tool,
-      brushColor, brushSize, throwableColor, throwableSize, liveShape,
-      showFullRoute, currentRouteStep, isExportingGif, exportVisibility,
-      items, selectedId, transformingItemId,
-      handleSelectOperator, setResizingItemId, setTransformingItemId,
-      updateItem, removeLine, removeThrowableLine, removeItem, clearRoute,
+      showFullRoute, currentRouteStep, isExportingGif,
+      items, selectedId,
+      updateItem, removeLine, removeThrowableLine, clearRoute,
       texts, editingTextId, updateText, removeText, handleContextMenu,
       roomLabels, activeRoomEdit, updateRoomLabel, removeRoomLabel]);
 
@@ -2101,13 +2125,7 @@ export default function MainCanvas({
           <>
             <span className="text-[13px] text-r6-muted-2">›</span>
             <Dropdown value={currentFloorId} placeholder="…" items={floorItems}
-              onChange={(id) => {
-                if (tool === "route" && selectedId !== null) {
-                  setFloor(id);
-                } else {
-                  setFloor(id); setCurrentRouteStep(1); setTool("cursor");
-                }
-              }} minWidth={68} />
+              onChange={(id) => setFloor(id)} minWidth={68} />
           </>
         )}
 
@@ -2436,7 +2454,90 @@ export default function MainCanvas({
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}   // cancel drawing if cursor leaves stage
             >
-              {stageLayers}
+              {staticLayers}
+
+              {/* Operator token layer — isolated from staticLayers so playbackRowIndex / timeline
+                  state changes re-render only tokens, never the committed lines / map background. */}
+              <Layer>
+                <KonvaGroup {...bpTransformProps}>
+                  {(() => {
+                    const viewScaleMultiplier = (currentView === "isometric" ? 0.4 : 1.0) / bpScale;
+                    const floorLabelMap: Record<string, string> = Object.fromEntries(
+                      (map?.floors ?? []).map((f) => [f.id, f.label])
+                    );
+                    return items
+                      .filter((i) => i.phase === currentPhase)
+                      .filter((i) => !hiddenOperators.includes(i.id))
+                      .filter((i) => !isExportingGif || exportVisibility === "all" || i.side === "neutral" || i.side === exportVisibility)
+                      .map((item) => (
+                        <MemoizedOperatorNode
+                          key={item.id}
+                          item={item}
+                          tool={tool}
+                          selectedId={selectedId}
+                          transformingItemId={transformingItemId}
+                          currentFloorId={currentFloorId}
+                          isPlayingTimeline={isPlayingTimeline}
+                          currentRouteStep={currentRouteStep}
+                          playbackRowIndex={playbackRowIndex}
+                          routeTimeMap={routeTimeMap}
+                          viewScaleMultiplier={viewScaleMultiplier}
+                          floorLabelMap={floorLabelMap}
+                          handleSelectOperator={handleSelectOperator}
+                          updateItem={updateItem}
+                          removeItem={removeItem}
+                          handleContextMenu={handleContextMenu}
+                          setResizingItemId={setResizingItemId}
+                          setTransformingItemId={setTransformingItemId}
+                        />
+                      ));
+                  })()}
+                </KonvaGroup>
+              </Layer>
+
+              {/* Live drawing layer — isolated so liveShape updates never bust the staticLayers memo */}
+              <Layer listening={false}>
+                <KonvaGroup {...bpTransformProps}>
+                  {liveShape && liveShape.type === "arrow" && (
+                    <Arrow
+                      points={liveShape.points}
+                      stroke={brushColor}
+                      fill={brushColor}
+                      strokeWidth={brushSize}
+                      pointerLength={12}
+                      pointerWidth={10}
+                      lineCap="round"
+                      listening={false}
+                      opacity={0.75}
+                    />
+                  )}
+                  {liveShape && liveShape.type === "line" && (
+                    <Line
+                      points={liveShape.points}
+                      stroke={brushColor}
+                      strokeWidth={brushSize}
+                      lineCap="round"
+                      lineJoin="round"
+                      tension={0.4}
+                      listening={false}
+                      opacity={0.75}
+                    />
+                  )}
+                  {liveShape && liveShape.type === "throwable" && (
+                    <Line
+                      points={liveShape.points}
+                      stroke={throwableColor}
+                      strokeWidth={throwableSize}
+                      dash={[10, 8]}
+                      tension={0.4}
+                      lineCap="round"
+                      lineJoin="round"
+                      listening={false}
+                      opacity={0.75}
+                    />
+                  )}
+                </KonvaGroup>
+              </Layer>
             </Stage>
           </div>
         )}
