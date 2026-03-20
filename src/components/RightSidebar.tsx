@@ -574,7 +574,7 @@ export default function RightSidebar({
                           isScanline ? "border-blue-500/50 bg-blue-900/50 text-blue-300" : "border-r6-border bg-r6-surface text-r6-muted-2 hover:text-r6-text"
                         )}
                         style={{ width: 38 }}
-                        title="Double-click to jump here"
+                        title={t("timeline_dbl_click", language)}
                       >
                         {row.label}
                       </div>
@@ -633,7 +633,7 @@ export default function RightSidebar({
             {/* ── Step assignment hint ─────────────────────────────────── */}
             <div className="shrink-0 border-t border-r6-border px-3 py-1.5">
               <p className="text-[10px] text-r6-muted-2">
-                点击空格将当前路线步骤 <span className="font-bold text-r6-accent">{STEP_CIRCLE[currentRouteStep - 1]}</span> 指定到该时间点
+                {t("timeline_hint_pre", language)}<span className="font-bold text-r6-accent">{STEP_CIRCLE[currentRouteStep - 1]}</span>{t("timeline_hint_post", language)}
               </p>
             </div>
           </div>

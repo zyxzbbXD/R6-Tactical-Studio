@@ -62,7 +62,7 @@ export default function SettingsModal() {
           </div>
           <div className="flex-1">
             <p className="text-[16px] font-semibold text-r6-text">
-              {t("AI Settings", language)}
+              {t("Settings", language)}
             </p>
             <p className="text-[13px] text-r6-muted">
               {t("API subtitle", language)}
@@ -85,14 +85,14 @@ export default function SettingsModal() {
               <div className="flex items-center gap-2">
                 <span className="text-r6-muted"><Bot size={15} /></span>
                 <span className="text-[14px] font-medium text-r6-text">
-                  AI辅助模式
+                  {t("ai_mode_title", language)}
                   <span className="ml-2 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-r6-accent-dim text-r6-accent border border-r6-accent/40">
                     Beta
                   </span>
                 </span>
               </div>
               <p className="text-[13px] text-r6-muted-2 leading-snug">
-                启用 AI 战术分析助手与 API 配置
+                {t("ai_mode_desc", language)}
               </p>
             </div>
             <button
