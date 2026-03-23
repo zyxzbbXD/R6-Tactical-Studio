@@ -321,6 +321,7 @@ export default function FloatingVideoPlayer() {
       lastValidTime:     number;
       firstHitTime:      number;
       lastInferredStart: number;   // drift anchor: should stay ~constant between steps
+      driftStrikes:      number;   // consecutive drift violations; execution at >= 2
       partial:           boolean;
     }
 
@@ -328,6 +329,7 @@ export default function FloatingVideoPlayer() {
       actionStart:       number;
       lastValidTime:     number;
       lastInferredStart: number;
+      driftStrikes:      number;
       partial:           boolean;
       hasPlanted:        boolean;  // once set, exempts from drift check (planted timer ≠ round timer)
     } | null = null;
@@ -339,8 +341,9 @@ export default function FloatingVideoPlayer() {
 
       if (isPlanted) {
         if (activeRound) {
-          // Defuser planted — keep round alive; hasPlanted exempts future OCR readings from drift check
+          // Defuser planted — keep round alive, reset strikes, exempt future readings from drift check
           activeRound.lastValidTime = t2;
+          activeRound.driftStrikes  = 0;
           if (!activeRound.hasPlanted) {
             activeRound.hasPlanted = true;
             addVideoMarker({ time: t2, label: "Defuser Planted" });
@@ -351,7 +354,7 @@ export default function FloatingVideoPlayer() {
             addVideoMarker({ time: Math.max(0, pendingRound.actionStart - 30), label: "Prep Phase" });
             addVideoMarker({ time: pendingRound.actionStart,                   label: "Action Phase" });
           }
-          activeRound  = { actionStart: pendingRound.actionStart, lastValidTime: t2, lastInferredStart: pendingRound.lastInferredStart, partial: pendingRound.partial, hasPlanted: true };
+          activeRound  = { actionStart: pendingRound.actionStart, lastValidTime: t2, lastInferredStart: pendingRound.lastInferredStart, driftStrikes: 0, partial: pendingRound.partial, hasPlanted: true };
           addVideoMarker({ time: t2, label: "Defuser Planted" });
           pendingRound = null;
         }
@@ -363,18 +366,24 @@ export default function FloatingVideoPlayer() {
 
         if (activeRound) {
           if (Math.abs(inferredStart - activeRound.actionStart) <= 60) {
-            // Drift check — skip when defuser was planted (post-plant clock is separate from round clock)
             const drift = Math.abs(inferredStart - activeRound.lastInferredStart);
+            // Drift check exempted when defuser was planted (post-plant clock differs from round clock)
             if (!activeRound.hasPlanted && drift > 5) {
-              // Slow-mo or broadcast cut detected → end round immediately
-              if (!activeRound.partial) {
-                const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
-                addVideoMarker({ time: endTime, label: "Round End" });
+              activeRound.driftStrikes++;
+              // Anchor frozen — do NOT update lastInferredStart or lastValidTime yet
+              if (activeRound.driftStrikes >= 2) {
+                // Three-strikes: slow-mo or cut confirmed → end round
+                if (!activeRound.partial) {
+                  const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
+                  addVideoMarker({ time: endTime, label: "Round End" });
+                }
+                activeRound  = null;
+                pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
               }
-              activeRound  = null;
-              pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, partial: isPartial };
+              // else: single strike — give it a chance to self-heal next step
             } else {
-              // Still the same round — keep tracking
+              // Clean reading — reset strikes, advance anchors
+              activeRound.driftStrikes      = 0;
               activeRound.lastValidTime     = t2;
               activeRound.lastInferredStart = inferredStart;
             }
@@ -385,37 +394,43 @@ export default function FloatingVideoPlayer() {
               addVideoMarker({ time: endTime, label: "Round End" });
             }
             activeRound  = null;
-            pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, partial: isPartial };
+            pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
           }
 
         } else if (pendingRound) {
           if (Math.abs(inferredStart - pendingRound.actionStart) <= 60) {
-            // Drift check — slow-mo / replay cut resets candidate window immediately
             const drift = Math.abs(inferredStart - pendingRound.lastInferredStart);
             if (drift > 5) {
-              pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, partial: isPartial };
+              pendingRound.driftStrikes++;
+              // Anchor frozen — do NOT update lastInferredStart or lastValidTime yet
+              if (pendingRound.driftStrikes >= 2) {
+                // Three-strikes: discard candidate, restart with fresh anchor
+                pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
+              }
+              // else: single strike — self-heal opportunity
             } else {
-              // Candidate signal is stable — advance window
+              // Clean reading — reset strikes, advance window
+              pendingRound.driftStrikes      = 0;
               pendingRound.lastValidTime     = t2;
               pendingRound.lastInferredStart = inferredStart;
-              // Promote once 40 s of uninterrupted, drift-free signal confirms a real round
+              // Promote once 40 s of drift-free signal confirms a real round
               if (pendingRound.lastValidTime - pendingRound.firstHitTime >= 40) {
                 if (!pendingRound.partial) {
                   addVideoMarker({ time: Math.max(0, pendingRound.actionStart - 30), label: "Prep Phase" });
                   addVideoMarker({ time: pendingRound.actionStart,                   label: "Action Phase" });
                 }
-                activeRound  = { actionStart: pendingRound.actionStart, lastValidTime: pendingRound.lastValidTime, lastInferredStart: pendingRound.lastInferredStart, partial: pendingRound.partial, hasPlanted: false };
+                activeRound  = { actionStart: pendingRound.actionStart, lastValidTime: pendingRound.lastValidTime, lastInferredStart: pendingRound.lastInferredStart, driftStrikes: 0, partial: pendingRound.partial, hasPlanted: false };
                 pendingRound = null;
               }
             }
           } else {
             // Big jump before 40 s threshold → discard (highlight replay), restart candidate
-            pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, partial: isPartial };
+            pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
           }
 
         } else {
           // Nothing active or buffered — start a new candidate
-          pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, partial: isPartial };
+          pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
         }
 
       } else {
