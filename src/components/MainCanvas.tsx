@@ -1878,8 +1878,8 @@ export default function MainCanvas({
         </div>
       </div>
 
-      {/* Spacer — reserves the toolbar's height in the flex flow */}
-      <div className="shrink-0" style={{ height: 41 }} />
+      {/* Spacer — reserves the toolbar's height in the flex flow (py-1.5 + h-8 = 2.75rem, scales with font size) */}
+      <div className="shrink-0" style={{ height: "2.75rem" }} />
 
       {/* Hidden .mty import input */}
       <input

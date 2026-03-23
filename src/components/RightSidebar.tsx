@@ -412,8 +412,8 @@ export default function RightSidebar({
     >
       <div className="flex h-full flex-col" style={{ width }}>
 
-        {/* ── Top spacer — clears the fixed toolbar (41 px height + 3 px gap) ─── */}
-        <div className="shrink-0 border-b border-r6-border" style={{ height: 44 }} />
+        {/* ── Top spacer — clears the fixed toolbar (py-1.5 + h-8 = 2.75rem, scales with font size) ─── */}
+        <div className="shrink-0 border-b border-r6-border" style={{ height: "2.75rem" }} />
 
         {/* ════════════════════════════════════════════════════════════════════
             TIMELINE TAB
