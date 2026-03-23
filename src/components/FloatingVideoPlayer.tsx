@@ -250,9 +250,6 @@ export default function FloatingVideoPlayer() {
     await worker.setParameters({ tessedit_char_whitelist: "0123456789:" } as any);
 
     const videoDuration = v.duration;
-    const step          = 10;
-    const totalSteps    = Math.ceil(videoDuration / step);
-    let   stepIdx       = 0;
 
     interface FrameResult { remaining: number | null; isPlanted: boolean; }
 
@@ -305,19 +302,6 @@ export default function FloatingVideoPlayer() {
       return result;
     };
 
-    const binarySearchRoundEnd = async (left: number, right: number): Promise<number> => {
-      const clampedRight = Math.min(right, videoDuration);
-      let lo = left, hi = clampedRight;
-      while (hi - lo > 1) {
-        const mid = Math.floor((lo + hi) / 2);
-        await seekTo(mid);
-        const { remaining } = await ocrFrame();
-        if (remaining !== null) lo = mid;
-        else                    hi = mid;
-      }
-      return hi;
-    };
-
     // Candidate round: buffered until 40 s of stable, drift-free signal confirms it's a real round
     interface CandidateRound {
       actionStart:       number;
@@ -338,7 +322,7 @@ export default function FloatingVideoPlayer() {
     } | null = null;
     let pendingRound: CandidateRound | null = null;
 
-    for (let t2 = 0; t2 < videoDuration && !abortRef.current; t2 += step) {
+    for (let t2 = 0; t2 < videoDuration && !abortRef.current;) {
       await seekTo(t2);
       const { remaining, isPlanted } = await ocrFrame();
 
@@ -377,8 +361,7 @@ export default function FloatingVideoPlayer() {
               if (activeRound.driftStrikes >= 2) {
                 // Three-strikes: slow-mo or cut confirmed → end round
                 if (!activeRound.partial) {
-                  const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
-                  localMarkers.push({ time: endTime, label: "Round End" });
+                  localMarkers.push({ time: Math.min(activeRound.lastValidTime + 2, videoDuration), label: "Round End" });
                 }
                 activeRound  = null;
                 pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
@@ -393,8 +376,7 @@ export default function FloatingVideoPlayer() {
           } else {
             // Big jump → close active round, start a new candidate
             if (!activeRound.partial) {
-              const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
-              localMarkers.push({ time: endTime, label: "Round End" });
+              localMarkers.push({ time: Math.min(activeRound.lastValidTime + 2, videoDuration), label: "Round End" });
             }
             activeRound  = null;
             pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
@@ -419,8 +401,8 @@ export default function FloatingVideoPlayer() {
               // Promote once 40 s of drift-free signal confirms a real round
               if (pendingRound.lastValidTime - pendingRound.firstHitTime >= 40) {
                 if (!pendingRound.partial) {
-                  // Only emit Prep Phase if OCR caught the round early enough (not mid-replay overlap)
-                  if (pendingRound.firstHitTime < pendingRound.actionStart - 15) {
+                  // Only emit Prep Phase if OCR caught the round early enough (replay took less than half of prep)
+                  if (pendingRound.firstHitTime < pendingRound.actionStart - 20) {
                     localMarkers.push({ time: Math.max(0, pendingRound.actionStart - 30), label: "Prep Phase" });
                   }
                   localMarkers.push({ time: pendingRound.actionStart, label: "Action Phase" });
@@ -444,24 +426,22 @@ export default function FloatingVideoPlayer() {
         pendingRound = null;
         if (activeRound && t2 > activeRound.actionStart + 250) {
           if (!activeRound.partial) {
-            const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
-            localMarkers.push({ time: endTime, label: "Round End" });
+            localMarkers.push({ time: Math.min(activeRound.lastValidTime + 2, videoDuration), label: "Round End" });
           }
           activeRound = null;
         }
       }
 
-      stepIdx++;
-      setAnalyzeProgress(Math.round((stepIdx / totalSteps) * 100));
+      // Adaptive step: 2 s near round-end or while planted, 10 s otherwise
+      const expectedRemaining = activeRound ? 180 - (t2 - activeRound.actionStart) : Infinity;
+      const nextStep = (isPlanted || expectedRemaining <= 15) ? 2 : 10;
+      t2 += nextStep;
+      setAnalyzeProgress(Math.round(Math.min((t2 / videoDuration) * 100, 99)));
     }
 
     // Trailing: seal the last confirmed active round (pendingRound never reached threshold → discard)
     if (!abortRef.current && activeRound && !activeRound.partial) {
-      const endTime = await binarySearchRoundEnd(
-        activeRound.lastValidTime,
-        Math.min(activeRound.lastValidTime + 20, videoDuration),
-      );
-      localMarkers.push({ time: endTime, label: "Round End" });
+      localMarkers.push({ time: Math.min(activeRound.lastValidTime + 2, videoDuration), label: "Round End" });
     }
 
     // ── Post-processing: sort → clean → commit ────────────────────────────────
