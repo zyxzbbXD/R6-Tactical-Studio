@@ -235,6 +235,9 @@ export default function FloatingVideoPlayer() {
     abortRef.current = false;
     clearVideoMarkers();
 
+    // Local staging array — markers are collected here and committed atomically at the end
+    const localMarkers: { time: number; label: string }[] = [];
+
     v.pause();
     setIsPlaying(false);
 
@@ -346,16 +349,16 @@ export default function FloatingVideoPlayer() {
           activeRound.driftStrikes  = 0;
           if (!activeRound.hasPlanted) {
             activeRound.hasPlanted = true;
-            addVideoMarker({ time: t2, label: "Defuser Planted" });
+            localMarkers.push({ time: t2, label: "Defuser Planted" });
           }
         } else if (pendingRound) {
           // Planted during candidate window: strongest possible confirmation → promote immediately
           if (!pendingRound.partial) {
-            addVideoMarker({ time: Math.max(0, pendingRound.actionStart - 30), label: "Prep Phase" });
-            addVideoMarker({ time: pendingRound.actionStart,                   label: "Action Phase" });
+            localMarkers.push({ time: Math.max(0, pendingRound.actionStart - 30), label: "Prep Phase" });
+            localMarkers.push({ time: pendingRound.actionStart,                   label: "Action Phase" });
           }
           activeRound  = { actionStart: pendingRound.actionStart, lastValidTime: t2, lastInferredStart: pendingRound.lastInferredStart, driftStrikes: 0, partial: pendingRound.partial, hasPlanted: true };
-          addVideoMarker({ time: t2, label: "Defuser Planted" });
+          localMarkers.push({ time: t2, label: "Defuser Planted" });
           pendingRound = null;
         }
         // If neither active nor pending: planted with no context — ignore
@@ -375,7 +378,7 @@ export default function FloatingVideoPlayer() {
                 // Three-strikes: slow-mo or cut confirmed → end round
                 if (!activeRound.partial) {
                   const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
-                  addVideoMarker({ time: endTime, label: "Round End" });
+                  localMarkers.push({ time: endTime, label: "Round End" });
                 }
                 activeRound  = null;
                 pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
@@ -391,7 +394,7 @@ export default function FloatingVideoPlayer() {
             // Big jump → close active round, start a new candidate
             if (!activeRound.partial) {
               const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
-              addVideoMarker({ time: endTime, label: "Round End" });
+              localMarkers.push({ time: endTime, label: "Round End" });
             }
             activeRound  = null;
             pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
@@ -416,8 +419,11 @@ export default function FloatingVideoPlayer() {
               // Promote once 40 s of drift-free signal confirms a real round
               if (pendingRound.lastValidTime - pendingRound.firstHitTime >= 40) {
                 if (!pendingRound.partial) {
-                  addVideoMarker({ time: Math.max(0, pendingRound.actionStart - 30), label: "Prep Phase" });
-                  addVideoMarker({ time: pendingRound.actionStart,                   label: "Action Phase" });
+                  // Only emit Prep Phase if OCR caught the round early enough (not mid-replay overlap)
+                  if (pendingRound.firstHitTime < pendingRound.actionStart - 15) {
+                    localMarkers.push({ time: Math.max(0, pendingRound.actionStart - 30), label: "Prep Phase" });
+                  }
+                  localMarkers.push({ time: pendingRound.actionStart, label: "Action Phase" });
                 }
                 activeRound  = { actionStart: pendingRound.actionStart, lastValidTime: pendingRound.lastValidTime, lastInferredStart: pendingRound.lastInferredStart, driftStrikes: 0, partial: pendingRound.partial, hasPlanted: false };
                 pendingRound = null;
@@ -439,7 +445,7 @@ export default function FloatingVideoPlayer() {
         if (activeRound && t2 > activeRound.actionStart + 250) {
           if (!activeRound.partial) {
             const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
-            addVideoMarker({ time: endTime, label: "Round End" });
+            localMarkers.push({ time: endTime, label: "Round End" });
           }
           activeRound = null;
         }
@@ -455,8 +461,30 @@ export default function FloatingVideoPlayer() {
         activeRound.lastValidTime,
         Math.min(activeRound.lastValidTime + 20, videoDuration),
       );
-      addVideoMarker({ time: endTime, label: "Round End" });
+      localMarkers.push({ time: endTime, label: "Round End" });
     }
+
+    // ── Post-processing: sort → clean → commit ────────────────────────────────
+    localMarkers.sort((a, b) => a.time - b.time);
+
+    const cleanedMarkers: typeof localMarkers = [];
+    for (let i = 0; i < localMarkers.length; i++) {
+      const cur  = localMarkers[i];
+      const next = localMarkers[i + 1];
+      // Drop a Defuser Planted that is immediately superseded by Round End (< 15 s gap)
+      if (cur.label === "Defuser Planted" && next?.label === "Round End" && next.time - cur.time < 15) {
+        continue;
+      }
+      // Dedup: drop if the same label was kept less than 20 s ago
+      const last = cleanedMarkers[cleanedMarkers.length - 1];
+      if (last && last.label === cur.label && cur.time - last.time < 20) {
+        continue;
+      }
+      cleanedMarkers.push(cur);
+    }
+
+    clearVideoMarkers();
+    for (const m of cleanedMarkers) addVideoMarker(m);
 
     await worker.terminate();
 
