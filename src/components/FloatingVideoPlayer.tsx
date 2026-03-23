@@ -251,7 +251,9 @@ export default function FloatingVideoPlayer() {
     const totalSteps    = Math.ceil(videoDuration / step);
     let   stepIdx       = 0;
 
-    const ocrFrameMode = async (mode: "broadcast" | "pov"): Promise<number | null> => {
+    interface FrameResult { remaining: number | null; isPlanted: boolean; }
+
+    const ocrFrameMode = async (mode: "broadcast" | "pov"): Promise<FrameResult> => {
       const vw = v.videoWidth;
       const vh = v.videoHeight;
       const bSy = vh * 0.05;
@@ -264,20 +266,32 @@ export default function FloatingVideoPlayer() {
       offscreen.width  = sw;
       offscreen.height = sh;
       ctx.drawImage(v, sx, Math.max(0, sy), sw, sh, 0, 0, sw, sh);
+
+      // Fast yellow-pixel scan — R6 defuser-planted timer turns yellow; skip OCR when planted
+      const pixels = ctx.getImageData(0, 0, sw, sh).data;
+      let yellowCount = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        if (pixels[i] > 180 && pixels[i + 1] > 160 && pixels[i + 2] < 100) yellowCount++;
+      }
+      if (yellowCount / (sw * sh) > 0.30) {
+        return { remaining: null, isPlanted: true };
+      }
+
       const { data: { text } } = await worker.recognize(offscreen);
       const m = text.match(/\b([0-2]):([0-5]\d)\b/);
-      if (!m) return null;
+      if (!m) return { remaining: null, isPlanted: false };
       const remaining = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-      return remaining <= 180 ? remaining : null;
+      return { remaining: remaining <= 180 ? remaining : null, isPlanted: false };
     };
 
     let currentUIMode: "broadcast" | "pov" = "broadcast";
-    const ocrFrame = async (): Promise<number | null> => {
+    const ocrFrame = async (): Promise<FrameResult> => {
       let result = await ocrFrameMode(currentUIMode);
-      if (result === null) {
+      // Only try fallback when primary had no yellow and OCR missed
+      if (result.remaining === null && !result.isPlanted) {
         const fallback = currentUIMode === "broadcast" ? "pov" : "broadcast";
-        result = await ocrFrameMode(fallback);
-        if (result !== null) currentUIMode = fallback;
+        const fb = await ocrFrameMode(fallback);
+        if (fb.remaining !== null || fb.isPlanted) { currentUIMode = fallback; result = fb; }
       }
       const dbg = debugCanvasRef.current;
       if (dbg) {
@@ -294,46 +308,92 @@ export default function FloatingVideoPlayer() {
       while (hi - lo > 1) {
         const mid = Math.floor((lo + hi) / 2);
         await seekTo(mid);
-        const remaining = await ocrFrame();
+        const { remaining } = await ocrFrame();
         if (remaining !== null) lo = mid;
         else                    hi = mid;
       }
       return hi;
     };
 
-    let activeRound: { actionStart: number; lastValidTime: number; partial: boolean } | null = null;
+    // Candidate round: buffered until 40 s of stable signal confirms it's not a highlight replay
+    interface CandidateRound {
+      actionStart:   number;
+      lastValidTime: number;
+      firstHitTime:  number;
+      partial:       boolean;
+    }
+
+    let activeRound:  { actionStart: number; lastValidTime: number; partial: boolean; hasPlanted: boolean } | null = null;
+    let pendingRound: CandidateRound | null = null;
 
     for (let t2 = 0; t2 < videoDuration && !abortRef.current; t2 += step) {
       await seekTo(t2);
-      const remaining = await ocrFrame();
+      const { remaining, isPlanted } = await ocrFrame();
 
-      if (remaining !== null) {
+      if (isPlanted) {
+        if (activeRound) {
+          // Defuser planted — keep the round alive and stamp the event once
+          activeRound.lastValidTime = t2;
+          if (!activeRound.hasPlanted) {
+            activeRound.hasPlanted = true;
+            addVideoMarker({ time: t2, label: "Defuser Planted" });
+          }
+        } else if (pendingRound) {
+          // Planted during candidate window: strongest possible confirmation → promote immediately
+          if (!pendingRound.partial) {
+            addVideoMarker({ time: Math.max(0, pendingRound.actionStart - 30), label: "Prep Phase" });
+            addVideoMarker({ time: pendingRound.actionStart,                   label: "Action Phase" });
+          }
+          activeRound  = { actionStart: pendingRound.actionStart, lastValidTime: t2, partial: pendingRound.partial, hasPlanted: true };
+          addVideoMarker({ time: t2, label: "Defuser Planted" });
+          pendingRound = null;
+        }
+        // If neither active nor pending: planted with no context — ignore
+
+      } else if (remaining !== null) {
         const inferredStart = t2 - (180 - remaining);
         const isPartial     = inferredStart < 0;
 
-        if (!activeRound) {
-          if (!isPartial) {
-            addVideoMarker({ time: Math.max(0, inferredStart - 30), label: "Prep Phase" });
-            addVideoMarker({ time: inferredStart,                   label: "Action Phase" });
+        if (activeRound) {
+          if (Math.abs(inferredStart - activeRound.actionStart) <= 60) {
+            // Still the same round — keep tracking
+            activeRound.lastValidTime = t2;
+          } else {
+            // Big jump → close active round, start a new candidate
+            if (!activeRound.partial) {
+              const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
+              addVideoMarker({ time: endTime, label: "Round End" });
+            }
+            activeRound  = null;
+            pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, partial: isPartial };
           }
-          activeRound = { actionStart: inferredStart, lastValidTime: t2, partial: isPartial };
 
-        } else if (Math.abs(inferredStart - activeRound.actionStart) <= 60) {
-          activeRound.lastValidTime = t2;
+        } else if (pendingRound) {
+          if (Math.abs(inferredStart - pendingRound.actionStart) <= 60) {
+            // Candidate signal is stable — advance window
+            pendingRound.lastValidTime = t2;
+            // Promote once 40 s of uninterrupted stable signal confirms this is a real round
+            if (pendingRound.lastValidTime - pendingRound.firstHitTime >= 40) {
+              if (!pendingRound.partial) {
+                addVideoMarker({ time: Math.max(0, pendingRound.actionStart - 30), label: "Prep Phase" });
+                addVideoMarker({ time: pendingRound.actionStart,                   label: "Action Phase" });
+              }
+              activeRound  = { actionStart: pendingRound.actionStart, lastValidTime: pendingRound.lastValidTime, partial: pendingRound.partial, hasPlanted: false };
+              pendingRound = null;
+            }
+          } else {
+            // Big jump before 40 s threshold → discard (highlight replay), restart candidate
+            pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, partial: isPartial };
+          }
 
         } else {
-          if (!activeRound.partial) {
-            const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
-            addVideoMarker({ time: endTime, label: "Round End" });
-          }
-          if (!isPartial) {
-            addVideoMarker({ time: Math.max(0, inferredStart - 30), label: "Prep Phase" });
-            addVideoMarker({ time: inferredStart,                   label: "Action Phase" });
-          }
-          activeRound = { actionStart: inferredStart, lastValidTime: t2, partial: isPartial };
+          // Nothing active or buffered — start a new candidate
+          pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, partial: isPartial };
         }
 
       } else {
+        // OCR miss: any unconfirmed candidate is immediately discarded (signal was too short)
+        pendingRound = null;
         if (activeRound && t2 > activeRound.actionStart + 250) {
           if (!activeRound.partial) {
             const endTime = await binarySearchRoundEnd(activeRound.lastValidTime, activeRound.lastValidTime + 20);
@@ -347,6 +407,7 @@ export default function FloatingVideoPlayer() {
       setAnalyzeProgress(Math.round((stepIdx / totalSteps) * 100));
     }
 
+    // Trailing: seal the last confirmed active round (pendingRound never reached threshold → discard)
     if (!abortRef.current && activeRound && !activeRound.partial) {
       const endTime = await binarySearchRoundEnd(
         activeRound.lastValidTime,
