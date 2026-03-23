@@ -1,5 +1,8 @@
-import { create } from "zustand";
+import { create, useStore } from "zustand";
+import { temporal } from "zundo";
+import type { TemporalState } from "zundo";
 import { useCanvasStore } from "./canvasStore";
+import { useUIStore } from "./useUIStore";
 
 // ─── Timeline constants (shared with RightSidebar) ─────────────────────────────
 
@@ -185,38 +188,12 @@ export interface ThrowableLine {
   floorId: string | null;
 }
 
-// ─── Granular Undo History ──────────────────────────────────────────────────────
-// Each entry records the minimal info needed to reverse one action.
-// floorId lets undo() snap the canvas back to the floor where the action occurred.
-
-type HistoryEntry =
-  | { type: "addLine";             id: string;                                                                      phase: number; floorId: string | null }
-  | { type: "addThrowableLine";    id: string;                                                                      phase: number; floorId: string | null }
-  | { type: "removeThrowableLine"; line: ThrowableLine;                                                             phase: number; floorId: string | null }
-  | { type: "addItem";             id: string;                                                                      phase: number; floorId: string | null }
-  | { type: "addRoutePoint";       itemId: string; prevX: number; prevY: number; prevRoute: Record<number, Waypoint>; phase: number; floorId: string | null }
-  | { type: "addText";             id: string;                                                                      phase: number; floorId: string | null }
-  | { type: "updateText";          id: string; prevNode: TextNode;                                                  phase: number; floorId: string | null }
-  | { type: "removeText";          node: TextNode;                                                                  phase: number; floorId: string | null }
-  | { type: "addRoomLabel";        id: string;                                                                      phase: number; floorId: string | null }
-  | { type: "updateRoomLabel";     id: string; prevLabel: RoomLabel;                                                phase: number; floorId: string | null }
-  | { type: "removeRoomLabel";     label: RoomLabel;                                                                phase: number; floorId: string | null }
-  | { type: "setRouteStepStatus";  itemId: string; prevRoute: Record<number, Waypoint>;                             phase: number; floorId: string | null }
-  | { type: "clearRoute";          itemId: string; prevRoute: Record<number, Waypoint>;                             phase: number; floorId: string | null };
-
 // ─── Store ─────────────────────────────────────────────────────────────────────
 
 interface BoardState {
   items: BoardItem[];
   lines: DrawnLine[];
   throwableLines: ThrowableLine[];
-  tool: Tool;
-  // Brush style (pen / arrow)
-  brushColor: string;
-  brushSize: number;
-  // Throwable style
-  throwableColor: string;
-  throwableSize: number;
   // Route settings
   currentRouteStep: 1 | 2 | 3 | 4 | 5;
   showFullRoute: boolean;
@@ -225,12 +202,12 @@ interface BoardState {
   exportPhases: number[];
   exportVisibility: "all" | "atk" | "def";
   gifExportRequested: boolean;
-
+  imageExportRequested: boolean;
+  allPhasesExportRequested: boolean;
   isExportWindowOpen: boolean;
-  isDraggingIcon: boolean;
+
   videoSrc: string | null;
   videoFileName: string;
-  pendingOperator: { operatorId: string; iconPath: string; name: string; side: "atk" | "def" | "neutral" } | null;
   isVideoOpen: boolean;
   notes: string;
   videoMarkers: VideoMarker[];
@@ -263,26 +240,18 @@ interface BoardState {
   // Double-click transform state (Konva Transformer overlay)
   transformingItemId: string | null;
 
-  // Internal undo history (not exposed to consumers)
-  _history: HistoryEntry[];
+  // ── Actions ─────────────────────────────────────────────────────────────────
 
-  setTool: (tool: Tool) => void;
-  setBrushStyle: (color: string, size: number) => void;
-  setThrowableStyle: (color: string, size: number) => void;
   setCurrentRouteStep: (step: 1 | 2 | 3 | 4 | 5) => void;
   setShowFullRoute: (show: boolean) => void;
   setExportPhases: (phases: number[]) => void;
   setExportVisibility: (v: "all" | "atk" | "def") => void;
   setGifExportRequested: (v: boolean) => void;
-  imageExportRequested: boolean;
-  allPhasesExportRequested: boolean;
   setImageExportRequested: (v: boolean) => void;
   setAllPhasesExportRequested: (v: boolean) => void;
   setExportWindowOpen: (open: boolean) => void;
-  setDraggingIcon: (value: boolean) => void;
   setVideoSrc: (src: string | null) => void;
   setVideoFileName: (name: string) => void;
-  setPendingOperator: (op: { operatorId: string; iconPath: string; name: string; side: "atk" | "def" | "neutral" } | null) => void;
   toggleVideo: () => void;
   setNotes: (notes: string) => void;
   setResizingItemId: (id: string | null) => void;
@@ -308,9 +277,10 @@ interface BoardState {
   addThrowableLine: (line: Pick<ThrowableLine, "id" | "points">) => void;
   removeThrowableLine: (id: string) => void;
   addRoutePoint: (itemId: string, step: 1 | 2 | 3 | 4 | 5, point: Waypoint) => void;
+  /** Remove a single waypoint at `stepIndex` from an operator's route. */
+  deleteRouteStep: (itemId: string, stepIndex: number) => void;
   clearRoute: (itemId: string) => void;
-  undo: () => void;
-  /** Bulk-load project data from a parsed JSON object; clears history. */
+  /** Bulk-load project data from a parsed JSON object; clears temporal history. */
   loadProjectData: (data: unknown) => void;
   clearAll: () => void;
   clearBoard: () => void;
@@ -327,456 +297,401 @@ interface BoardState {
   switchPhase: (targetPhase: number, floorId: string | null) => void;
 }
 
-export const useBoardStore = create<BoardState>((set) => ({
-  items: [],
-  lines: [],
-  throwableLines: [],
-  tool: "cursor",
-  brushColor: "#e85d2a",
-  brushSize: 3,
-  throwableColor: "#facc15",
-  throwableSize: 4,
-  currentRouteStep: 1,
-  showFullRoute: true,
-  exportPhases: [1, 2, 3, 4],
-  exportVisibility: "all",
-  gifExportRequested: false,
-  imageExportRequested: false,
-  allPhasesExportRequested: false,
-  isExportWindowOpen: false,
-  isDraggingIcon: false,
-  videoSrc: null,
-  videoFileName: "",
-  pendingOperator: null,
-  isVideoOpen: false,
-  notes: "",
-  videoMarkers: [],
-  currentPhase: 1,
-  texts: [],
-  roomLabels: [],
-  isPlaying: false,
-  hiddenOperators: [],
-  routeTimeMap: {},
-  stepTips: {},
-  playbackRowIndex: 0,
-  isPlayingTimeline: false,
-  resizingItemId: null,
-  transformingItemId: null,
-  _history: [],
+export const useBoardStore = create<BoardState>()(
+  temporal(
+    (set) => ({
+      items: [],
+      lines: [],
+      throwableLines: [],
+      currentRouteStep: 1,
+      showFullRoute: true,
+      exportPhases: [1, 2, 3, 4],
+      exportVisibility: "all",
+      gifExportRequested: false,
+      imageExportRequested: false,
+      allPhasesExportRequested: false,
+      isExportWindowOpen: false,
+      videoSrc: null,
+      videoFileName: "",
+      isVideoOpen: false,
+      notes: "",
+      videoMarkers: [],
+      currentPhase: 1,
+      texts: [],
+      roomLabels: [],
+      isPlaying: false,
+      hiddenOperators: [],
+      routeTimeMap: {},
+      playbackRowIndex: 0,
+      isPlayingTimeline: false,
+      resizingItemId: null,
+      transformingItemId: null,
 
-  toggleOperatorVisibility: (id) =>
-    set((s) => ({
-      hiddenOperators: s.hiddenOperators.includes(id)
-        ? s.hiddenOperators.filter((h) => h !== id)
-        : [...s.hiddenOperators, id],
-    })),
-  setPlaybackRowIndex: (i) => set({ playbackRowIndex: i }),
-  setIsPlayingTimeline: (v) => set({ isPlayingTimeline: v }),
-  setRouteTimeMapping: (itemId, step, rowIndex) =>
-    set((s) => ({
-      routeTimeMap: {
-        ...s.routeTimeMap,
-        [itemId]: { ...(s.routeTimeMap[itemId] ?? {}), [step]: rowIndex },
-      },
-    })),
+      toggleOperatorVisibility: (id) =>
+        set((s) => ({
+          hiddenOperators: s.hiddenOperators.includes(id)
+            ? s.hiddenOperators.filter((h) => h !== id)
+            : [...s.hiddenOperators, id],
+        })),
+      setPlaybackRowIndex: (i) => set({ playbackRowIndex: i }),
+      setIsPlayingTimeline: (v) => set({ isPlayingTimeline: v }),
+      setRouteTimeMapping: (itemId, step, rowIndex) =>
+        set((s) => ({
+          routeTimeMap: {
+            ...s.routeTimeMap,
+            [itemId]: { ...(s.routeTimeMap[itemId] ?? {}), [step]: rowIndex },
+          },
+        })),
 
-  setTool: (tool) => set({ tool }),
-  setBrushStyle: (color, size) => set({ brushColor: color, brushSize: size }),
-  setThrowableStyle: (color, size) => set({ throwableColor: color, throwableSize: size }),
-  setCurrentRouteStep: (step) => set({ currentRouteStep: step }),
-  setShowFullRoute: (show) => set({ showFullRoute: show }),
-  setExportPhases: (phases) => set({ exportPhases: phases }),
-  setExportVisibility: (v) => set({ exportVisibility: v }),
-  setGifExportRequested: (v) => set({ gifExportRequested: v }),
-  setImageExportRequested: (v) => set({ imageExportRequested: v }),
-  setAllPhasesExportRequested: (v) => set({ allPhasesExportRequested: v }),
-  setExportWindowOpen: (open) => set({ isExportWindowOpen: open }),
-  setDraggingIcon: (value) => set({ isDraggingIcon: value }),
-  setVideoSrc: (src) => set({ videoSrc: src }),
-  setVideoFileName: (name) => set({ videoFileName: name }),
-  setPendingOperator: (op) => set({ pendingOperator: op }),
-  toggleVideo: () => set((s) => ({ isVideoOpen: !s.isVideoOpen })),
-  setNotes: (notes) => set({ notes }),
-  setResizingItemId: (id) => set({ resizingItemId: id }),
-  setTransformingItemId: (id) => set({ transformingItemId: id }),
-  setIsPlaying: (v) => set({ isPlaying: v }),
-  addText: (node) =>
-    set((s) => {
-      const floorId = useCanvasStore.getState().currentFloorId;
-      const newNode = { ...node, phase: s.currentPhase, floorId };
-      return {
-        texts: [...s.texts, newNode],
-        _history: [...s._history, { type: "addText", id: node.id, phase: s.currentPhase, floorId }],
-      };
-    }),
-  updateText: (id, updates) =>
-    set((s) => {
-      const prev = s.texts.find((t) => t.id === id);
-      if (!prev) return { texts: s.texts };
-      return {
-        texts: s.texts.map((t) => (t.id === id ? { ...t, ...updates } : t)),
-        _history: [...s._history, { type: "updateText", id, prevNode: prev, phase: s.currentPhase, floorId: prev.floorId }],
-      };
-    }),
-  removeText: (id) =>
-    set((s) => {
-      const node = s.texts.find((t) => t.id === id);
-      if (!node) return { texts: s.texts };
-      return {
-        texts: s.texts.filter((t) => t.id !== id),
-        _history: [...s._history, { type: "removeText", node, phase: s.currentPhase, floorId: node.floorId }],
-      };
-    }),
+      setCurrentRouteStep: (step) => set({ currentRouteStep: step }),
+      setShowFullRoute: (show) => set({ showFullRoute: show }),
+      setExportPhases: (phases) => set({ exportPhases: phases }),
+      setExportVisibility: (v) => set({ exportVisibility: v }),
+      setGifExportRequested: (v) => set({ gifExportRequested: v }),
+      setImageExportRequested: (v) => set({ imageExportRequested: v }),
+      setAllPhasesExportRequested: (v) => set({ allPhasesExportRequested: v }),
+      setExportWindowOpen: (open) => set({ isExportWindowOpen: open }),
+      setVideoSrc: (src) => set({ videoSrc: src }),
+      setVideoFileName: (name) => set({ videoFileName: name }),
+      toggleVideo: () => set((s) => ({ isVideoOpen: !s.isVideoOpen })),
+      setNotes: (notes) => set({ notes }),
+      setResizingItemId: (id) => set({ resizingItemId: id }),
+      setTransformingItemId: (id) => set({ transformingItemId: id }),
+      setIsPlaying: (v) => set({ isPlaying: v }),
 
-  addRoomLabel: (label) =>
-    set((s) => {
-      const floorId = useCanvasStore.getState().currentFloorId;
-      const newLabel: RoomLabel = { ...label, floorId };
-      return {
-        roomLabels: [...s.roomLabels, newLabel],
-        _history: [...s._history, { type: "addRoomLabel", id: label.id, phase: s.currentPhase, floorId }],
-      };
-    }),
+      addText: (node) =>
+        set((s) => {
+          const floorId = useCanvasStore.getState().currentFloorId;
+          return { texts: [...s.texts, { ...node, phase: s.currentPhase, floorId }] };
+        }),
+      updateText: (id, updates) =>
+        set((s) => ({
+          texts: s.texts.map((t) => (t.id === id ? { ...t, ...updates } : t)),
+        })),
+      removeText: (id) =>
+        set((s) => ({ texts: s.texts.filter((t) => t.id !== id) })),
 
-  updateRoomLabel: (id, updates) =>
-    set((s) => {
-      const prev = s.roomLabels.find((rl) => rl.id === id);
-      if (!prev) return { roomLabels: s.roomLabels };
-      return {
-        roomLabels: s.roomLabels.map((rl) => (rl.id === id ? { ...rl, ...updates } : rl)),
-        _history: [...s._history, { type: "updateRoomLabel", id, prevLabel: prev, phase: s.currentPhase, floorId: prev.floorId }],
-      };
-    }),
+      addRoomLabel: (label) =>
+        set((s) => {
+          const floorId = useCanvasStore.getState().currentFloorId;
+          return { roomLabels: [...s.roomLabels, { ...label, floorId }] };
+        }),
+      updateRoomLabel: (id, updates) =>
+        set((s) => ({
+          roomLabels: s.roomLabels.map((rl) => (rl.id === id ? { ...rl, ...updates } : rl)),
+        })),
+      removeRoomLabel: (id) =>
+        set((s) => ({ roomLabels: s.roomLabels.filter((rl) => rl.id !== id) })),
+      setRoomLabelsForFloor: (floorId, labels) =>
+        set((s) => ({
+          roomLabels: [
+            ...s.roomLabels.filter((rl) => rl.floorId !== floorId),
+            ...labels,
+          ],
+        })),
 
-  removeRoomLabel: (id) =>
-    set((s) => {
-      const label = s.roomLabels.find((rl) => rl.id === id);
-      if (!label) return { roomLabels: s.roomLabels };
-      return {
-        roomLabels: s.roomLabels.filter((rl) => rl.id !== id),
-        _history: [...s._history, { type: "removeRoomLabel", label, phase: s.currentPhase, floorId: label.floorId }],
-      };
-    }),
-
-  setRoomLabelsForFloor: (floorId, labels) =>
-    set((s) => ({
-      roomLabels: [
-        ...s.roomLabels.filter((rl) => rl.floorId !== floorId),
-        ...labels,
-      ],
-    })),
-
-  setRouteStepStatus: (itemId, step, status) =>
-    set((s) => {
-      const item = s.items.find((i) => i.id === itemId);
-      if (!item) return { items: s.items };
-      const existing = item.route[step];
-      const base: Waypoint = existing ?? { x: item.x, y: item.y };
-      return {
-        items: s.items.map((i) =>
-          i.id !== itemId ? i : { ...i, route: { ...i.route, [step]: { ...base, status } } }
-        ),
-        _history: [...s._history, { type: "setRouteStepStatus", itemId, prevRoute: { ...item.route }, phase: s.currentPhase, floorId: item.floorId }],
-      };
-    }),
-
-  addItem: (item) =>
-    set((s) => {
-      const floorId = useCanvasStore.getState().currentFloorId;
-      // Enforce uniqueness: same operatorId may not appear twice in the same phase
-      if (item.side !== "neutral") {
-        const alreadyExists = s.items.some(
-          (i) => i.operatorId === item.operatorId && i.phase === s.currentPhase
-        );
-        if (alreadyExists) return {};
-      }
-      // Enforce 5-operator limit per side per phase+floor (neutral gadgets are exempt)
-      if (item.side !== "neutral") {
-        const count = s.items.filter(
-          (i) => i.side === item.side && i.phase === s.currentPhase && i.floorId === floorId
-        ).length;
-        if (count >= 5) return {}; // silently reject
-      }
-      return {
-        items: [...s.items, { ...item, phase: s.currentPhase, route: {}, scale: 3, floorId }],
-        _history: [...s._history, { type: "addItem", id: item.id, phase: s.currentPhase, floorId }],
-        routeTimeMap: {
-          ...s.routeTimeMap,
-          [item.id]: { 1: getDefaultRowForStep(s.currentPhase, 1) },
-        },
-      };
-    }),
-
-  updateItem: (id, updates) =>
-    set((s) => ({
-      items: s.items.map((item) => (item.id === id ? { ...item, ...updates } : item)),
-    })),
-
-  removeItem: (id) =>
-    set((s) => {
-      const { [id]: _rmMap, ...newRouteTimeMap } = s.routeTimeMap;
-      return {
-        items: s.items.filter((i) => i.id !== id),
-        hiddenOperators: s.hiddenOperators.filter((h) => h !== id),
-        routeTimeMap: newRouteTimeMap,
-        // Prune all history entries for this item so undo slots aren't wasted
-        _history: s._history.filter((e) =>
-          !(e.type === "addItem" && e.id === id) &&
-          !(e.type === "addRoutePoint" && e.itemId === id)
-        ),
-      };
-    }),
-
-  addLine: (line) =>
-    set((s) => {
-      const floorId = useCanvasStore.getState().currentFloorId;
-      return {
-        lines: [...s.lines, { ...line, phase: s.currentPhase, floorId }],
-        _history: [...s._history, { type: "addLine", id: line.id, phase: s.currentPhase, floorId }],
-      };
-    }),
-
-  removeLine: (id) =>
-    set((s) => ({
-      lines: s.lines.filter((l) => l.id !== id),
-      _history: s._history.filter((e) => !(e.type === "addLine" && e.id === id)),
-    })),
-
-  // Auto-inject current throwable color/size and floorId from store/canvas state
-  addThrowableLine: ({ id, points }) =>
-    set((s) => {
-      const floorId = useCanvasStore.getState().currentFloorId;
-      return {
-        throwableLines: [
-          ...s.throwableLines,
-          { id, points, color: s.throwableColor, strokeWidth: s.throwableSize, phase: s.currentPhase, floorId },
-        ],
-        _history: [...s._history, { type: "addThrowableLine", id, phase: s.currentPhase, floorId }],
-      };
-    }),
-
-  removeThrowableLine: (id) =>
-    set((s) => {
-      const line = s.throwableLines.find((l) => l.id === id);
-      if (!line) return { throwableLines: s.throwableLines };
-      return {
-        throwableLines: s.throwableLines.filter((l) => l.id !== id),
-        _history: [...s._history, { type: "removeThrowableLine", line, phase: s.currentPhase, floorId: line.floorId }],
-      };
-    }),
-
-  addRoutePoint: (itemId, step, point) =>
-    set((s) => {
-      const item = s.items.find((i) => i.id === itemId);
-      if (!item) return {};
-      const floorId = useCanvasStore.getState().currentFloorId;
-      // Snapshot the item's PREVIOUS position/route before mutating
-      const histEntry: HistoryEntry = {
-        type: "addRoutePoint",
-        itemId,
-        prevX: item.x,
-        prevY: item.y,
-        prevRoute: { ...item.route },
-        phase: s.currentPhase,
-        floorId,
-      };
-      // Stamp the current floor onto the waypoint so cross-floor routing works
-      const waypointWithFloor: Waypoint = { ...point, floorId };
-
-      const newItems = s.items.map((i) => {
-        if (i.id !== itemId) return i;
-        // Step 1 = base position; update x/y directly and clear any stale route[1]
-        if (step === 1) {
-          const { 1: _dropped, ...restRoute } = i.route as Record<number, Waypoint>;
-          // Also update floorId on the item itself to reflect the new base floor
-          return { ...i, x: point.x, y: point.y, floorId, route: restRoute };
-        }
-        return { ...i, route: { ...i.route, [step]: waypointWithFloor } };
-      });
-      // Auto-assign default timeline row for this step if not already mapped
-      const existingOpMap = s.routeTimeMap[itemId] ?? {};
-      const newRouteTimeMap: Record<string, Record<number, number>> =
-        step in existingOpMap
-          ? s.routeTimeMap
-          : { ...s.routeTimeMap, [itemId]: { ...existingOpMap, [step]: getDefaultRowForStep(s.currentPhase, step) } };
-
-      return { items: newItems, _history: [...s._history, histEntry], routeTimeMap: newRouteTimeMap };
-    }),
-
-  clearRoute: (itemId) =>
-    set((s) => {
-      const item = s.items.find((i) => i.id === itemId);
-      if (!item) return { items: s.items };
-      return {
-        items: s.items.map((i) => (i.id === itemId ? { ...i, route: {} } : i)),
-        _history: [...s._history, { type: "clearRoute", itemId, prevRoute: { ...item.route }, phase: s.currentPhase, floorId: item.floorId }],
-      };
-    }),
-
-  // Granular undo: pop the most recent history entry matching currentPhase,
-  // then snap the canvas view to the floor where that action occurred.
-  undo: () =>
-    set((s) => {
-      // Scan backward to find last entry for current phase
-      let idx = -1;
-      for (let i = s._history.length - 1; i >= 0; i--) {
-        if (s._history[i].phase === s.currentPhase) { idx = i; break; }
-      }
-      if (idx === -1) return {};
-
-      const entry = s._history[idx];
-      const newHistory = s._history.filter((_, i) => i !== idx);
-
-      // Sync canvas floor to where the undone action took place
-      if (entry.floorId) {
-        useCanvasStore.getState().setFloor(entry.floorId);
-      }
-
-      switch (entry.type) {
-        case "addLine":
-          return { _history: newHistory, lines: s.lines.filter((l) => l.id !== entry.id) };
-        case "addThrowableLine":
-          return { _history: newHistory, throwableLines: s.throwableLines.filter((l) => l.id !== entry.id) };
-        case "removeThrowableLine":
-          return { _history: newHistory, throwableLines: [...s.throwableLines, entry.line] };
-        case "addItem":
-          return { _history: newHistory, items: s.items.filter((i) => i.id !== entry.id) };
-        case "addRoutePoint":
+      setRouteStepStatus: (itemId, step, status) =>
+        set((s) => {
+          const item = s.items.find((i) => i.id === itemId);
+          if (!item) return { items: s.items };
+          const existing = item.route[step];
+          const base: Waypoint = existing ?? { x: item.x, y: item.y };
           return {
-            _history: newHistory,
-            items: s.items.map((item) =>
-              item.id === entry.itemId
-                ? { ...item, x: entry.prevX, y: entry.prevY, route: entry.prevRoute }
-                : item
+            items: s.items.map((i) =>
+              i.id !== itemId ? i : { ...i, route: { ...i.route, [step]: { ...base, status } } }
             ),
           };
-        case "addText":
-          return { _history: newHistory, texts: s.texts.filter((t) => t.id !== entry.id) };
-        case "updateText":
-          return { _history: newHistory, texts: s.texts.map((t) => (t.id === entry.id ? entry.prevNode : t)) };
-        case "removeText":
-          return { _history: newHistory, texts: [...s.texts, entry.node] };
-        case "addRoomLabel":
-          return { _history: newHistory, roomLabels: s.roomLabels.filter((rl) => rl.id !== entry.id) };
-        case "updateRoomLabel":
-          return { _history: newHistory, roomLabels: s.roomLabels.map((rl) => (rl.id === entry.id ? entry.prevLabel : rl)) };
-        case "removeRoomLabel":
-          return { _history: newHistory, roomLabels: [...s.roomLabels, entry.label] };
-        case "setRouteStepStatus":
+        }),
+
+      addItem: (item) =>
+        set((s) => {
+          const floorId = useCanvasStore.getState().currentFloorId;
+          // Enforce uniqueness: same operatorId may not appear twice in the same phase
+          if (item.side !== "neutral") {
+            const alreadyExists = s.items.some(
+              (i) => i.operatorId === item.operatorId && i.phase === s.currentPhase
+            );
+            if (alreadyExists) return {};
+          }
+          // Enforce 5-operator limit per side per phase+floor (neutral gadgets are exempt)
+          if (item.side !== "neutral") {
+            const count = s.items.filter(
+              (i) => i.side === item.side && i.phase === s.currentPhase && i.floorId === floorId
+            ).length;
+            if (count >= 5) return {}; // silently reject
+          }
           return {
-            _history: newHistory,
-            items: s.items.map((item) =>
-              item.id === entry.itemId ? { ...item, route: entry.prevRoute } : item
-            ),
+            items: [...s.items, { ...item, phase: s.currentPhase, route: {}, scale: 3, floorId }],
+            routeTimeMap: {
+              ...s.routeTimeMap,
+              [item.id]: { 1: getDefaultRowForStep(s.currentPhase, 1) },
+            },
           };
-        case "clearRoute":
+        }),
+
+      updateItem: (id, updates) =>
+        set((s) => ({
+          items: s.items.map((item) => (item.id === id ? { ...item, ...updates } : item)),
+        })),
+
+      removeItem: (id) =>
+        set((s) => {
+          const { [id]: _rmMap, ...newRouteTimeMap } = s.routeTimeMap;
           return {
-            _history: newHistory,
-            items: s.items.map((item) =>
-              item.id === entry.itemId ? { ...item, route: entry.prevRoute } : item
-            ),
+            items: s.items.filter((i) => i.id !== id),
+            hiddenOperators: s.hiddenOperators.filter((h) => h !== id),
+            routeTimeMap: newRouteTimeMap,
           };
-        default:
-          return { _history: newHistory };
-      }
-    }),
+        }),
 
-  loadProjectData: (data) => {
-    const d = data as Record<string, unknown>;
-    // Atomically set all board arrays, preserving phase/floorId from the file
-    set({
-      items:          Array.isArray(d.items)          ? (d.items          as BoardItem[])    : [],
-      lines:          Array.isArray(d.lines)          ? (d.lines          as DrawnLine[])    : [],
-      throwableLines: Array.isArray(d.throwableLines) ? (d.throwableLines as ThrowableLine[]) : [],
-      texts:          Array.isArray(d.texts)          ? (d.texts          as TextNode[])     : [],
-      roomLabels:     Array.isArray(d.roomLabels)     ? (d.roomLabels     as RoomLabel[])    : [],
-      notes:          typeof d.notes === "string"     ? d.notes                              : "",
-      hiddenOperators: Array.isArray(d.hiddenOperators) ? (d.hiddenOperators as string[])    : [],
-      routeTimeMap:   (d.routeTimeMap && typeof d.routeTimeMap === "object")
-                        ? (d.routeTimeMap as Record<string, Record<number, number>>)
-                        : {},
-      _history: [],
-    });
-    // Sync map/floor in canvasStore
-    const canvas = useCanvasStore.getState();
-    const mapId   = typeof d.mapId   === "string" ? d.mapId   : null;
-    const floorId = typeof d.floorId === "string" ? d.floorId : null;
-    if (mapId) {
-      if (floorId) canvas.setMapAndFloor(mapId, floorId);
-      else         canvas.setMap(mapId);
-    }
-  },
+      addLine: (line) =>
+        set((s) => {
+          const floorId = useCanvasStore.getState().currentFloorId;
+          return { lines: [...s.lines, { ...line, phase: s.currentPhase, floorId }] };
+        }),
 
-  clearAll: () => set({ items: [], lines: [], throwableLines: [], texts: [], roomLabels: [], _history: [], hiddenOperators: [], routeTimeMap: {} }),
-  clearBoard: () => set({ items: [], lines: [], throwableLines: [], texts: [], roomLabels: [], notes: "", _history: [], hiddenOperators: [], routeTimeMap: {} }),
-  clearFloor: (phase, floorId) => set((s) => ({
-    items:          s.items.filter((i) => !(i.phase === phase && i.floorId === floorId)),
-    lines:          s.lines.filter((l) => !(l.phase === phase && l.floorId === floorId)),
-    throwableLines: s.throwableLines.filter((l) => !(l.phase === phase && l.floorId === floorId)),
-    texts:          s.texts.filter((t) => !(t.phase === phase && t.floorId === floorId)),
-    // Room labels are floor-scoped only — clear all for this floor regardless of phase
-    roomLabels:     s.roomLabels.filter((rl) => rl.floorId !== floorId),
-    _history: [],
-  })),
+      removeLine: (id) =>
+        set((s) => ({ lines: s.lines.filter((l) => l.id !== id) })),
 
-  addVideoMarker: (marker) => set((s) => ({ videoMarkers: [...s.videoMarkers, marker] })),
-  clearVideoMarkers: () => set({ videoMarkers: [] }),
+      // Color/size injected from useUIStore so this module stays free of UI state
+      addThrowableLine: ({ id, points }) =>
+        set((s) => {
+          const floorId = useCanvasStore.getState().currentFloorId;
+          const { throwableColor, throwableSize } = useUIStore.getState();
+          return {
+            throwableLines: [
+              ...s.throwableLines,
+              { id, points, color: throwableColor, strokeWidth: throwableSize, phase: s.currentPhase, floorId },
+            ],
+          };
+        }),
 
-  // Switch phase — no cloning; used internally for export loops.
-  setPhase: (phase) => set({ currentPhase: phase }),
+      removeThrowableLine: (id) =>
+        set((s) => ({ throwableLines: s.throwableLines.filter((l) => l.id !== id) })),
 
-  switchPhase: (targetPhase, floorId) =>
-    set((s) => {
-      if (targetPhase === s.currentPhase) return {};
+      addRoutePoint: (itemId, step, point) =>
+        set((s) => {
+          const item = s.items.find((i) => i.id === itemId);
+          if (!item) return {};
+          const floorId = useCanvasStore.getState().currentFloorId;
+          // Stamp the current floor onto the waypoint so cross-floor routing works
+          const waypointWithFloor: Waypoint = { ...point, floorId };
 
-      // Always jump the scanline to the first row of the new phase and reset the route step
-      const phaseSync = {
-        playbackRowIndex: PHASE_START_ROW[targetPhase] ?? 0,
-        currentRouteStep: 1 as const,
-      };
+          const newItems = s.items.map((i) => {
+            if (i.id !== itemId) return i;
+            // Step 1 = base position; update x/y directly and clear any stale route[1]
+            if (step === 1) {
+              const { 1: _dropped, ...restRoute } = i.route as Record<number, Waypoint>;
+              // Also update floorId on the item itself to reflect the new base floor
+              return { ...i, x: point.x, y: point.y, floorId, route: restRoute };
+            }
+            return { ...i, route: { ...i.route, [step]: waypointWithFloor } };
+          });
+          // Auto-assign default timeline row for this step if not already mapped
+          const existingOpMap = s.routeTimeMap[itemId] ?? {};
+          const newRouteTimeMap: Record<string, Record<number, number>> =
+            step in existingOpMap
+              ? s.routeTimeMap
+              : { ...s.routeTimeMap, [itemId]: { ...existingOpMap, [step]: getDefaultRowForStep(s.currentPhase, step) } };
 
-      // Only apply continuity cloning when advancing forward by exactly one phase
-      const isForwardStep = targetPhase === s.currentPhase + 1;
-      if (!isForwardStep) return { currentPhase: targetPhase, ...phaseSync };
+          return { items: newItems, routeTimeMap: newRouteTimeMap };
+        }),
 
-      // If the target phase already has operators on this floor, just switch
-      const targetHasOps = s.items.some(
-        (i) => i.phase === targetPhase && i.floorId === floorId && i.side !== "neutral"
-      );
-      if (targetHasOps) return { currentPhase: targetPhase, ...phaseSync };
+      deleteRouteStep: (itemId, stepIndex) =>
+        set((s) => {
+          const item = s.items.find((i) => i.id === itemId);
+          if (!item) return {};
+          // Guard: step must exist in the route dict
+          if (!(stepIndex in (item.route as Record<number, unknown>))) return {};
 
-      // Clone all items from current phase on this floor into the target phase.
-      // Each clone starts at the last-known route position with a fresh empty route.
-      // Dead operators and operators that moved to another floor are excluded.
-      const sourceItems = s.items.filter(
-        (i) => i.phase === s.currentPhase && i.floorId === floorId
-      );
-      const cloned: BoardItem[] = [];
-      for (const item of sourceItems) {
-        const final = lastRouteState(item);
-        if (final.status === "dead") continue;          // Fix 2: skip dead operators
-        cloned.push({
-          ...item,
-          id: crypto.randomUUID(),
-          phase: targetPhase,
-          x: final.x,
-          y: final.y,
-          floorId: final.floorId,                       // Fix 1: inherit final floor
-          route: {} as Record<number, Waypoint>,
+          const prevRoute = { ...item.route } as Record<number, Waypoint>;
+
+          // Remove the target step, then shift all higher-indexed steps down by 1
+          const { [stepIndex]: _deleted, ...withoutStep } = prevRoute;
+          const newRoute = Object.entries(withoutStep).reduce<Record<number, Waypoint>>(
+            (acc, [k, v]) => {
+              const key = Number(k);
+              acc[key > stepIndex ? key - 1 : key] = v;
+              return acc;
+            },
+            {},
+          ) as BoardItem["route"];
+
+          // Sync the timeline mapping with the same re-indexing
+          const prevOpMap = { ...(s.routeTimeMap[itemId] ?? {}) } as Record<number, number>;
+          const newOpMap = Object.entries(prevOpMap).reduce<Record<number, number>>(
+            (acc, [k, v]) => {
+              const key = Number(k);
+              if (key === stepIndex) return acc;
+              acc[key > stepIndex ? key - 1 : key] = v;
+              return acc;
+            },
+            {},
+          );
+
+          return {
+            items: s.items.map((i) => (i.id === itemId ? { ...i, route: newRoute } : i)),
+            routeTimeMap: { ...s.routeTimeMap, [itemId]: newOpMap },
+          };
+        }),
+
+      clearRoute: (itemId) =>
+        set((s) => ({
+          items: s.items.map((i) => (i.id === itemId ? { ...i, route: {} } : i)),
+        })),
+
+      loadProjectData: (data) => {
+        const d = data as Record<string, unknown>;
+        const linkedVideoName = typeof d.linkedVideoName === "string" ? d.linkedVideoName : null;
+
+        set((s) => {
+          // ── Media-Offline validation ────────────────────────────────────────
+          let videoSrc      = s.videoSrc;
+          let videoFileName = s.videoFileName;
+          if (linkedVideoName) {
+            if (s.videoFileName !== linkedVideoName) {
+              // Wrong video in player — enter Media Offline state
+              videoSrc      = null;
+              videoFileName = linkedVideoName;
+            }
+            // else: correct video already loaded — leave it untouched
+          } else {
+            // Board has no linked video — clear player
+            videoSrc      = null;
+            videoFileName = "";
+          }
+
+          return {
+            items:           Array.isArray(d.items)           ? (d.items           as BoardItem[])                   : [],
+            lines:           Array.isArray(d.lines)           ? (d.lines           as DrawnLine[])                   : [],
+            throwableLines:  Array.isArray(d.throwableLines)  ? (d.throwableLines  as ThrowableLine[])               : [],
+            texts:           Array.isArray(d.texts)           ? (d.texts           as TextNode[])                    : [],
+            roomLabels:      Array.isArray(d.roomLabels)      ? (d.roomLabels      as RoomLabel[])                   : [],
+            notes:           typeof d.notes === "string"      ? d.notes                                              : "",
+            hiddenOperators: Array.isArray(d.hiddenOperators) ? (d.hiddenOperators as string[])                      : [],
+            routeTimeMap:    (d.routeTimeMap && typeof d.routeTimeMap === "object")
+                               ? (d.routeTimeMap as Record<string, Record<number, number>>)
+                               : {},
+            videoMarkers:    Array.isArray(d.videoMarkers)    ? (d.videoMarkers    as VideoMarker[])                 : [],
+            videoSrc,
+            videoFileName,
+          };
         });
-      }
+        // Sync map/floor in canvasStore
+        const canvas = useCanvasStore.getState();
+        const mapId   = typeof d.mapId   === "string" ? d.mapId   : null;
+        const floorId = typeof d.floorId === "string" ? d.floorId : null;
+        if (mapId) {
+          if (floorId) canvas.setMapAndFloor(mapId, floorId);
+          else         canvas.setMap(mapId);
+        }
+        // Clear undo history so loaded state is a clean baseline
+        useBoardStore.temporal.getState().clear();
+      },
 
-      // Give each clone a clean routeTimeMap entry for step 1
-      const newRouteTimeMap = { ...s.routeTimeMap };
-      for (const c of cloned) {
-        newRouteTimeMap[c.id] = { 1: getDefaultRowForStep(targetPhase, 1) };
-      }
+      clearAll: () => {
+        set({ items: [], lines: [], throwableLines: [], texts: [], roomLabels: [], hiddenOperators: [], routeTimeMap: {} });
+        useBoardStore.temporal.getState().clear();
+      },
+      clearBoard: () => {
+        set({ items: [], lines: [], throwableLines: [], texts: [], roomLabels: [], notes: "", hiddenOperators: [], routeTimeMap: {} });
+        useBoardStore.temporal.getState().clear();
+      },
+      clearFloor: (phase, floorId) => {
+        set((s) => ({
+          items:          s.items.filter((i) => !(i.phase === phase && i.floorId === floorId)),
+          lines:          s.lines.filter((l) => !(l.phase === phase && l.floorId === floorId)),
+          throwableLines: s.throwableLines.filter((l) => !(l.phase === phase && l.floorId === floorId)),
+          texts:          s.texts.filter((t) => !(t.phase === phase && t.floorId === floorId)),
+          // Room labels are floor-scoped only — clear all for this floor regardless of phase
+          roomLabels:     s.roomLabels.filter((rl) => rl.floorId !== floorId),
+        }));
+        useBoardStore.temporal.getState().clear();
+      },
 
-      return {
-        currentPhase: targetPhase,
-        items: [...s.items, ...cloned],
-        routeTimeMap: newRouteTimeMap,
-        ...phaseSync,
-      };
+      addVideoMarker: (marker) => set((s) => ({ videoMarkers: [...s.videoMarkers, marker] })),
+      clearVideoMarkers: () => set({ videoMarkers: [] }),
+
+      // Switch phase — no cloning; used internally for export loops.
+      setPhase: (phase) => set({ currentPhase: phase }),
+
+      switchPhase: (targetPhase, floorId) =>
+        set((s) => {
+          if (targetPhase === s.currentPhase) return {};
+
+          // Always jump the scanline to the first row of the new phase and reset the route step
+          const phaseSync = {
+            playbackRowIndex: PHASE_START_ROW[targetPhase] ?? 0,
+            currentRouteStep: 1 as const,
+          };
+
+          // Only apply continuity cloning when advancing forward by exactly one phase
+          const isForwardStep = targetPhase === s.currentPhase + 1;
+          if (!isForwardStep) return { currentPhase: targetPhase, ...phaseSync };
+
+          // If the target phase already has operators on this floor, just switch
+          const targetHasOps = s.items.some(
+            (i) => i.phase === targetPhase && i.floorId === floorId && i.side !== "neutral"
+          );
+          if (targetHasOps) return { currentPhase: targetPhase, ...phaseSync };
+
+          // Clone all items from current phase on this floor into the target phase.
+          // Each clone starts at the last-known route position with a fresh empty route.
+          // Dead operators and operators that moved to another floor are excluded.
+          const sourceItems = s.items.filter(
+            (i) => i.phase === s.currentPhase && i.floorId === floorId
+          );
+          const cloned: BoardItem[] = [];
+          for (const item of sourceItems) {
+            const final = lastRouteState(item);
+            if (final.status === "dead") continue;
+            cloned.push({
+              ...item,
+              id: crypto.randomUUID(),
+              phase: targetPhase,
+              x: final.x,
+              y: final.y,
+              floorId: final.floorId,
+              route: {} as Record<number, Waypoint>,
+            });
+          }
+
+          // Give each clone a clean routeTimeMap entry for step 1
+          const newRouteTimeMap = { ...s.routeTimeMap };
+          for (const c of cloned) {
+            newRouteTimeMap[c.id] = { 1: getDefaultRowForStep(targetPhase, 1) };
+          }
+
+          return {
+            currentPhase: targetPhase,
+            items: [...s.items, ...cloned],
+            routeTimeMap: newRouteTimeMap,
+            ...phaseSync,
+          };
+        }),
     }),
-}));
+    {
+      partialize: (state) => ({
+        items:          state.items,
+        lines:          state.lines,
+        throwableLines: state.throwableLines,
+        texts:          state.texts,
+        routeTimeMap:   state.routeTimeMap,
+      }),
+      limit: 50,
+    },
+  ),
+);
+
+type TemporalBoardState = {
+  items: BoardItem[];
+  lines: DrawnLine[];
+  throwableLines: ThrowableLine[];
+  texts: TextNode[];
+  routeTimeMap: Record<string, Record<number, number>>;
+};
+
+/** React hook for the zundo temporal store (undo / redo / history). */
+export const useTemporalBoardStore = <T>(
+  selector: (state: TemporalState<TemporalBoardState>) => T,
+): T => useStore(useBoardStore.temporal, selector);

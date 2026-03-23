@@ -19,8 +19,8 @@ import {
   Package,
 } from "lucide-react";
 import { ATK_OPERATORS, DEF_OPERATORS, GADGETS, OPERATOR_GADGETS, MAPS, type GadgetConfig, type OperatorConfig } from "../config/assets";
-import { dragState } from "../store/dragState";
 import { useBoardStore } from "../store/useBoardStore";
+import { useUIStore } from "../store/useUIStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useProjectStore } from "../store/useProjectStore";
 import { t } from "../locales/i18n";
@@ -59,9 +59,11 @@ function AssetGrid({
   items: (OperatorConfig | GadgetConfig)[];
   containerWidth?: number;
 }) {
-  const setDraggingIcon    = useBoardStore((s) => s.setDraggingIcon);
-  const setTool            = useBoardStore((s) => s.setTool);
-  const setPendingOperator = useBoardStore((s) => s.setPendingOperator);
+  const setDraggingIcon      = useUIStore((s) => s.setDraggingIcon);
+  const setTool              = useUIStore((s) => s.setTool);
+  const setPendingOperator   = useUIStore((s) => s.setPendingOperator);
+  const setDraggingOperator  = useUIStore((s) => s.setDraggingOperator);
+  const clearDraggingOperator = useUIStore((s) => s.clearDraggingOperator);
 
   // Switch to 5 columns when the sidebar is wider than 125% of the default 320px base
   const gridCols = containerWidth > 400 ? "grid-cols-5" : "grid-cols-4";
@@ -81,13 +83,13 @@ function AssetGrid({
           }}
           onDragStart={(e) => {
             const side = "side" in op ? (op.side as "atk" | "def") : "neutral";
-            dragState.operator = { operatorId: op.id, iconPath: op.iconPath, name: op.name, side };
+            setDraggingOperator({ operatorId: op.id, iconPath: op.iconPath, name: op.name, side });
             setDraggingIcon(true);
             e.dataTransfer.effectAllowed = "copy";
             e.dataTransfer.setData("text/plain", op.id);
           }}
           onDragEnd={() => {
-            setTimeout(() => { dragState.operator = null; }, 100);
+            clearDraggingOperator();
             setDraggingIcon(false);
           }}
           data-operator-id={op.id}
@@ -151,23 +153,44 @@ export default function Sidebar({
     return [...map.values()];
   }, [projectsList]);
 
-  const [isCreating, setIsCreating] = useState(false);
-  const [newName, setNewName]       = useState("");
-  const newNameRef                  = useRef<HTMLInputElement>(null);
-  const loadFileRef                 = useRef<HTMLInputElement>(null);
+  const [isCreating,       setIsCreating]       = useState(false);
+  const [newName,          setNewName]          = useState("");
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingName,      setEditingName]      = useState("");
+  const newNameRef  = useRef<HTMLInputElement>(null);
+  const loadFileRef = useRef<HTMLInputElement>(null);
+
+  const commitRename = (id: string) => {
+    useProjectStore.getState().renameProject(id, editingName);
+    setEditingProjectId(null);
+    setEditingName("");
+  };
+  const cancelRename = () => {
+    setEditingProjectId(null);
+    setEditingName("");
+  };
 
   const handleLoadFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
+    const fallbackName = file.name.replace(/\.mty$/i, "").trim() || "Untitled_Project";
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       try {
-        const data = JSON.parse(ev.target?.result as string);
-        useBoardStore.getState().loadProjectData(data);
+        const parsed = JSON.parse(ev.target?.result as string);
+        if (parsed.payload) {
+          if (!parsed.meta?.name?.trim()) {
+            parsed.meta = { ...parsed.meta, name: fallbackName };
+          }
+          await useProjectStore.getState().installImportedProject(parsed);
+        } else {
+          useBoardStore.getState().loadProjectData(parsed);
+          useUIStore.getState().setTool("cursor");
+        }
       } catch {
-        console.error("❌ [Sidebar] Failed to load project JSON");
-        alert("Import failed: invalid or corrupted JSON file.");
+        console.error("❌ [Sidebar] Failed to load 项目文件");
+        alert("Import failed: invalid or corrupted 项目文件.");
       }
     };
     reader.readAsText(file);
@@ -251,10 +274,10 @@ export default function Sidebar({
                 </p>
               )}
 
-              {grouped.map((group) => (
+              {grouped.map((group, index) => (
                 <div key={group.id}>
                   {/* Map group header */}
-                  <div className="flex items-center gap-1.5 px-3 pt-1.5 pb-0.5 text-[13px] font-semibold uppercase tracking-wider text-r6-muted-2">
+                  <div className={cn("flex items-center gap-1.5 px-3 pb-0.5 text-[13px] font-semibold uppercase tracking-wider text-r6-muted-2", index === 0 ? "pt-0" : "pt-2")}>
                     <MapIcon size={12} />
                     <span>{(() => { const tk = `map_${group.id}`; const tv = t(tk, language); return tv !== tk ? tv : group.label; })()}</span>
                   </div>
@@ -269,6 +292,11 @@ export default function Sidebar({
                       >
                         <button
                           onClick={() => loadProject(proj.id)}
+                          onDoubleClick={(e) => {
+                            e.preventDefault();
+                            setEditingProjectId(proj.id);
+                            setEditingName(proj.name);
+                          }}
                           className={cn(
                             "flex flex-1 items-center gap-1.5 py-1 pl-6 text-[14px] rounded-l truncate",
                             isActive
@@ -277,7 +305,22 @@ export default function Sidebar({
                           )}
                         >
                           <FileText size={13} className="shrink-0 opacity-60" />
-                          <span className="truncate">{proj.name}</span>
+                          {editingProjectId === proj.id ? (
+                            <input
+                              autoFocus
+                              value={editingName}
+                              onChange={(e) => setEditingName(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter")  { e.stopPropagation(); commitRename(proj.id); }
+                                if (e.key === "Escape") { e.stopPropagation(); cancelRename(); }
+                              }}
+                              onBlur={() => commitRename(proj.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex-1 min-w-0 bg-transparent outline-none border-b border-r6-accent text-r6-accent text-[14px] leading-tight"
+                            />
+                          ) : (
+                            <span className="truncate">{proj.name}</span>
+                          )}
                         </button>
 
                         {/* Delete button — visible on row hover */}
@@ -335,7 +378,7 @@ export default function Sidebar({
                   <input
                     ref={loadFileRef}
                     type="file"
-                    accept=".json"
+                    accept=".mty,.json"
                     className="hidden"
                     onChange={handleLoadFile}
                   />

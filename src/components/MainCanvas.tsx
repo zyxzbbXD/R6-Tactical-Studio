@@ -1,4 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCanvasDraw } from "../hooks/useCanvasDraw";
+import { useCanvasExport } from "../hooks/useCanvasExport";
 import {
   Stage, Layer,
   Image as KonvaImage,
@@ -22,7 +24,6 @@ import {
   PanelLeftClose, PanelLeftOpen, LayoutTemplate,
   Spline, Route, MessageSquare, Tag, TableProperties,
 } from "lucide-react";
-import { dragState } from "../store/dragState";
 // Hardcoded blueprint scale factors per map id.
 // Each value scales the blueprint image so it visually fills the 6400×3600 canvas.
 // Maps not listed fall back to 1.0.
@@ -45,8 +46,10 @@ import { useShallow } from "zustand/react/shallow";
 import { useCanvasStore, type ViewMode, type OverlayKey } from "../store/canvasStore";
 import {
   useBoardStore,
-  type BoardItem, type Tool, type Waypoint,
+  useTemporalBoardStore,
+  type BoardItem, type Tool,
 } from "../store/useBoardStore";
+import { useUIStore } from "../store/useUIStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useProjectStore } from "../store/useProjectStore";
 import { t } from "../locales/i18n";
@@ -103,202 +106,10 @@ function getSnapPositionAtTimelineRow(
   return { ...getStepPos(bestStep), step: bestStep };
 }
 
-// ─── PDF export helpers ─────────────────────────────────────────────────────
-
-const ORANGE: [number, number, number] = [232, 93, 42];
-const DARK:   [number, number, number] = [26,  26,  26];
-
-/** Strip bold/italic markers and normalise <br> for plain-text display. */
-function stripMd(s: string) {
-  return s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/<br\s*\/?>/gi, " / ").trim();
-}
-
-/**
- * Render markdown notes to one or more A4 canvas pages using system fonts.
- *
- * Why Canvas 2D instead of jsPDF text API:
- *   jsPDF ships only Latin fonts (Helvetica/Times). CJK characters are replaced
- *   with placeholder boxes. The Canvas 2D API uses OS system fonts
- *   (PingFang SC, Microsoft YaHei, Hiragino Sans…) which render CJK natively.
- *   Each finished canvas is exported as a PNG and added to the PDF via addImage().
- */
-function renderNotesToCanvas(md: string, mapLabel: string, date: string): string[] {
-  // A4 at 96 dpi
-  const PX_W  = 794;
-  const PX_H  = 1123;
-  const SCALE = 2;          // HiDPI — canvas physical pixels = logical × 2
-  const MG    = 42;         // margin px (logical)
-  const CW    = PX_W - MG * 2;
-
-  // System font stack — covers Windows, macOS, Linux, Android
-  const F = '"Microsoft YaHei","PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",'
-          + '"Noto Sans SC","Source Han Sans SC",system-ui,sans-serif';
-
-  const makeCanvas = () => {
-    const el  = document.createElement("canvas");
-    el.width  = PX_W * SCALE;
-    el.height = PX_H * SCALE;
-    const ctx = el.getContext("2d")!;
-    ctx.scale(SCALE, SCALE);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, PX_W, PX_H);
-    return { el, ctx };
-  };
-
-  const pages: string[] = [];
-  let { el, ctx } = makeCanvas();
-  let y = MG;
-
-  // Draw page header (orange bar + title)
-  const drawHeader = () => {
-    ctx.fillStyle = "#e85d2a";
-    ctx.fillRect(MG, y, 3, 22);
-    ctx.font = `bold 18px ${F}`;
-    ctx.fillStyle = "#111111";
-    ctx.fillText("R6 Tactical Studio", MG + 8, y + 16);
-    y += 24;
-    ctx.font = `11px ${F}`;
-    ctx.fillStyle = "#888888";
-    ctx.fillText(`${mapLabel}${mapLabel ? "  ·  " : ""}${date}`, MG + 8, y);
-    y += 6;
-    ctx.strokeStyle = "#e85d2a";
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(MG, y); ctx.lineTo(MG + CW, y); ctx.stroke();
-    y += 14;
-    // "TACTIC NOTES" label
-    ctx.font = `bold 9px ${F}`;
-    ctx.fillStyle = "#e85d2a";
-    ctx.fillText("TACTIC NOTES", MG, y);
-    y += 12;
-  };
-  drawHeader();
-
-  const flush = () => {
-    pages.push(el.toDataURL("image/png", 1.0));
-    ({ el, ctx } = makeCanvas());
-    y = MG;
-    drawHeader();
-  };
-
-  const need = (h: number) => { if (y + h > PX_H - MG) flush(); };
-
-  // Wrap a string to fit within maxWidth using ctx.measureText (works for CJK)
-  const wrap = (text: string, maxW: number, fnt: string): string[] => {
-    ctx.font = fnt;
-    if (ctx.measureText(text).width <= maxW) return [text];
-    const lines: string[] = [];
-    let cur = "";
-    for (const ch of text) {
-      if (ctx.measureText(cur + ch).width > maxW) { lines.push(cur); cur = ch; }
-      else cur += ch;
-    }
-    if (cur) lines.push(cur);
-    return lines;
-  };
-
-  let tableHeaderDone = false;
-
-  for (const raw of md.split("\n")) {
-    const line = raw.trimEnd();
-
-    if (!line.trim() || /^---+$/.test(line)) {
-      tableHeaderDone = false;
-      y += 5; continue;
-    }
-
-    // ### heading
-    if (/^### /.test(line)) {
-      tableHeaderDone = false;
-      need(28);
-      y += 8;
-      const fnt = `bold 10px ${F}`;
-      ctx.font = fnt;
-      ctx.fillStyle = "#e85d2a";
-      ctx.fillText(stripMd(line.slice(4)).toUpperCase(), MG, y);
-      y += 3;
-      ctx.strokeStyle = "#e0e0e0"; ctx.lineWidth = 0.5;
-      ctx.beginPath(); ctx.moveTo(MG, y); ctx.lineTo(MG + CW, y); ctx.stroke();
-      y += 8;
-      continue;
-    }
-
-    // Table separator
-    if (/^\|[\s|:-]+\|$/.test(line)) { tableHeaderDone = true; continue; }
-
-    // Table row
-    if (line.startsWith("|")) {
-      const cells = line.split("|").slice(1, -1).map((c) => stripMd(c));
-      if (!cells.length) continue;
-      const isHdr = !tableHeaderDone;
-      const colW  = CW / cells.length;
-      const ROW_H = 22;
-      need(ROW_H + 2);
-
-      cells.forEach((cell, i) => {
-        const x = MG + i * colW;
-        if (isHdr) {
-          ctx.fillStyle = "#f4f4f5";
-          ctx.fillRect(x, y, colW, ROW_H);
-          ctx.strokeStyle = "#e0e0e0"; ctx.lineWidth = 0.5;
-          ctx.strokeRect(x, y, colW, ROW_H);
-          ctx.font = `bold 10px ${F}`;
-          ctx.fillStyle = "#e85d2a";
-        } else {
-          ctx.strokeStyle = "#e0e0e0"; ctx.lineWidth = 0.5;
-          ctx.strokeRect(x, y, colW, ROW_H);
-          ctx.font = `10px ${F}`;
-          ctx.fillStyle = "#1a1a1a";
-        }
-        // Truncate text to fit cell width
-        let txt = cell;
-        while (txt.length > 1 && ctx.measureText(txt).width > colW - 8) txt = txt.slice(0, -1);
-        if (txt !== cell) txt += "…";
-        ctx.fillText(txt, x + 4, y + 14);
-      });
-      y += ROW_H;
-      continue;
-    }
-
-    // List item
-    if (/^[*-] /.test(line)) {
-      tableHeaderDone = false;
-      const fnt   = `11px ${F}`;
-      const lines = wrap(stripMd(line.slice(2)), CW - 18, fnt);
-      need(lines.length * 17 + 4);
-      ctx.font = fnt;
-      ctx.fillStyle = "#e85d2a";
-      ctx.fillText("•", MG + 5, y + 13);
-      ctx.fillStyle = "#1a1a1a";
-      lines.forEach((l, idx) => ctx.fillText(l, MG + 18, y + 13 + idx * 17));
-      y += lines.length * 17 + 3;
-      continue;
-    }
-
-    // Plain paragraph
-    tableHeaderDone = false;
-    const fnt   = `11px ${F}`;
-    const lines = wrap(stripMd(line), CW, fnt);
-    need(lines.length * 17 + 4);
-    ctx.font = fnt;
-    ctx.fillStyle = "#1a1a1a";
-    lines.forEach((l, idx) => ctx.fillText(l, MG, y + 13 + idx * 17));
-    y += lines.length * 17 + 4;
-  }
-
-  pages.push(el.toDataURL("image/png", 1.0));
-  return pages;
-}
-
 // ─── Helpers ────────────────────────────────────────────────────────────────
+// PDF export helpers (ORANGE, DARK, stripMd, renderNotesToCanvas) → hooks/useCanvasExport.ts
 
-/** Convert a Konva stage-pointer position to canvas (world) coordinates. */
-function toCanvasPos(stage: Konva.Stage): Vec2 {
-  const p = stage.getPointerPosition()!;
-  return {
-    x: (p.x - stage.x()) / stage.scaleX(),
-    y: (p.y - stage.y()) / stage.scaleY(),
-  };
-}
+
 
 /**
  * Expand a BoardItem's sparse route dict into 6 positions (index 0 = base, 1–5 = steps).
@@ -874,65 +685,64 @@ export default function MainCanvas({
   const jsonImportRef        = useRef<HTMLInputElement>(null);
   const roomLabelsImportRef  = useRef<HTMLInputElement>(null);
 
-  // ── Board store (items / lines / tool / notes) ────────────────────────────
+  // ── UI store (tool / brush / cursor state) ───────────────────────────────
   const {
     tool, setTool,
     brushColor, brushSize,
     throwableColor, throwableSize,
-    currentRouteStep, setCurrentRouteStep, showFullRoute,
-    exportPhases, exportVisibility, gifExportRequested, setGifExportRequested,
-    imageExportRequested, setImageExportRequested,
-    allPhasesExportRequested, setAllPhasesExportRequested,
-    setExportWindowOpen,
-    items, lines, throwableLines, texts, roomLabels,
     isDraggingIcon,
     pendingOperator, setPendingOperator,
+  } = useUIStore(useShallow((s) => ({
+    tool: s.tool, setTool: s.setTool,
+    brushColor: s.brushColor, brushSize: s.brushSize,
+    throwableColor: s.throwableColor, throwableSize: s.throwableSize,
+    isDraggingIcon: s.isDraggingIcon,
+    pendingOperator: s.pendingOperator, setPendingOperator: s.setPendingOperator,
+  })));
+
+  const undo = useTemporalBoardStore((s) => s.undo);
+
+  // ── Board store (items / lines / notes) ──────────────────────────────────
+  const {
+    currentRouteStep, setCurrentRouteStep, showFullRoute,
+    exportVisibility, setExportWindowOpen,
+    items, lines, throwableLines, texts, roomLabels,
     isVideoOpen, toggleVideo,
     notes,
     addItem, updateItem, removeItem,
-    addLine, removeLine,
-    addThrowableLine, removeThrowableLine,
-    addRoutePoint, clearRoute,
-    addText, updateText, removeText,
-    addRoomLabel, updateRoomLabel, removeRoomLabel,
+    removeLine,
+    removeThrowableLine,
+    deleteRouteStep, clearRoute,
+    updateText, removeText,
+    updateRoomLabel, removeRoomLabel,
     setRouteStepStatus,
     isPlaying, setIsPlaying,
     hiddenOperators,
     routeTimeMap,
     isPlayingTimeline,
     playbackRowIndex,
-    undo,
     currentPhase, setPhase, switchPhase,
     setResizingItemId,
     transformingItemId, setTransformingItemId,
   } = useBoardStore(useShallow((s) => ({
-    tool: s.tool, setTool: s.setTool,
-    brushColor: s.brushColor, brushSize: s.brushSize,
-    throwableColor: s.throwableColor, throwableSize: s.throwableSize,
     currentRouteStep: s.currentRouteStep, setCurrentRouteStep: s.setCurrentRouteStep, showFullRoute: s.showFullRoute,
-    exportPhases: s.exportPhases, exportVisibility: s.exportVisibility,
-    gifExportRequested: s.gifExportRequested, setGifExportRequested: s.setGifExportRequested,
-    imageExportRequested: s.imageExportRequested, setImageExportRequested: s.setImageExportRequested,
-    allPhasesExportRequested: s.allPhasesExportRequested, setAllPhasesExportRequested: s.setAllPhasesExportRequested,
+    exportVisibility: s.exportVisibility,
     setExportWindowOpen: s.setExportWindowOpen,
     items: s.items, lines: s.lines, throwableLines: s.throwableLines, texts: s.texts, roomLabels: s.roomLabels,
-    isDraggingIcon: s.isDraggingIcon,
-    pendingOperator: s.pendingOperator, setPendingOperator: s.setPendingOperator,
     isVideoOpen: s.isVideoOpen, toggleVideo: s.toggleVideo,
     notes: s.notes,
     addItem: s.addItem, updateItem: s.updateItem, removeItem: s.removeItem,
-    addLine: s.addLine, removeLine: s.removeLine,
-    addThrowableLine: s.addThrowableLine, removeThrowableLine: s.removeThrowableLine,
-    addRoutePoint: s.addRoutePoint, clearRoute: s.clearRoute,
-    addText: s.addText, updateText: s.updateText, removeText: s.removeText,
-    addRoomLabel: s.addRoomLabel, updateRoomLabel: s.updateRoomLabel, removeRoomLabel: s.removeRoomLabel,
+    removeLine: s.removeLine,
+    removeThrowableLine: s.removeThrowableLine,
+    deleteRouteStep: s.deleteRouteStep, clearRoute: s.clearRoute,
+    updateText: s.updateText, removeText: s.removeText,
+    updateRoomLabel: s.updateRoomLabel, removeRoomLabel: s.removeRoomLabel,
     setRouteStepStatus: s.setRouteStepStatus,
     isPlaying: s.isPlaying, setIsPlaying: s.setIsPlaying,
     hiddenOperators: s.hiddenOperators,
     routeTimeMap: s.routeTimeMap,
     isPlayingTimeline: s.isPlayingTimeline,
     playbackRowIndex: s.playbackRowIndex,
-    undo: s.undo,
     currentPhase: s.currentPhase, setPhase: s.setPhase, switchPhase: s.switchPhase,
     setResizingItemId: s.setResizingItemId,
     transformingItemId: s.transformingItemId, setTransformingItemId: s.setTransformingItemId,
@@ -968,8 +778,6 @@ export default function MainCanvas({
   const zoomUiTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [zoomPercent, setZoomPercent]     = useState(100);
   const [containerSize, setContainerSize] = useState<Size>({ width: 0, height: 0 });
-  const [isExporting,   setIsExporting]   = useState(false);
-  const [isExportingGif, setIsExportingGif] = useState(false);
 
   // ── Blueprint transform — lifted from MapImageLayer so items co-transform ──
   // buildingCenter: updated from whichever image is currently loaded.
@@ -997,17 +805,13 @@ export default function MainCanvas({
   const bpScale   = isStandardScale ? (BLUEPRINT_MANUAL_SCALES[currentMapId ?? ""] ?? 1.0) : 1.0;
   const bpOffsetX = effectiveCenter?.x ?? 0;
   const bpOffsetY = effectiveCenter?.y ?? 0;
+  // Render-scale compensation: keeps strokes and operator icons visually consistent
+  // regardless of bpScale.  Isometric view additionally shrinks tokens to 40 % of normal.
+  const renderScaleFactor = (currentView === "isometric" ? 0.4 : 1.0) / bpScale;
   // Shared Konva transform applied to BOTH the image layer and the items Group.
   const bpTransformProps = isStandardBp
     ? { x: 3200, y: 1800, offsetX: bpOffsetX, offsetY: bpOffsetY, scaleX: bpScale, scaleY: bpScale }
     : { x: 0,    y: 0,    offsetX: 0,         offsetY: 0,         scaleX: 1,       scaleY: 1       };
-
-  // Live drawing state (not committed to store yet)
-  const [liveShape, setLiveShape] = useState<{
-    type: "line" | "arrow" | "throwable";
-    points: number[];
-  } | null>(null);
-  const isDrawingRef = useRef(false);
 
   // Refs
   const stageRef        = useRef<Konva.Stage>(null);
@@ -1019,6 +823,21 @@ export default function MainCanvas({
   // Tracks the last size committed to state — readable inside ResizeObserver closure.
   const committedSizeRef    = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
 
+  // ── Drawing hook ───────────────────────────────────────────────────────────
+  // liveShape, isDrawingRef, toMapCoords and all three mouse handlers live here.
+  // The hook reads tool/brushColor/etc. from useBoardStore directly.
+  const { handleMouseDown, handleMouseMove, handleMouseUp, liveShape } = useCanvasDraw({
+    stageRef,
+    containerRef,
+    isStandardBp,
+    bpScale,
+    bpOffsetX,
+    bpOffsetY,
+    selectedId,
+    setSelectedId,
+    setCtxMenu,
+    setActiveRoomEdit,
+  });
 
   // Derived
   const floor      = currentFloor();
@@ -1149,14 +968,6 @@ export default function MainCanvas({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFloorId, currentMapId]);
 
-  // ── Cancel live drawing when switching tools ───────────────────────────────
-  useEffect(() => {
-    isDrawingRef.current = false;
-    setLiveShape(null);
-    // Keep selection alive for route tool so waypoints attach to the selected op
-    if (tool !== "cursor" && tool !== "route") setSelectedId(null);
-  }, [tool]);
-
   // ── Keyboard: Delete / Backspace removes selected item or text node ───────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1171,12 +982,7 @@ export default function MainCanvas({
         setSelectedId(null);
       } else if (tool === "route") {
         // In route mode: remove only the current step waypoint, not the whole operator
-        const item = items.find((i) => i.id === selectedId);
-        if (item && (item.route as Record<number, unknown>)[currentRouteStep]) {
-          const newRoute = { ...item.route } as Record<number, unknown>;
-          delete newRoute[currentRouteStep];
-          updateItem(selectedId, { route: newRoute as BoardItem["route"] });
-        }
+        deleteRouteStep(selectedId, currentRouteStep);
       } else {
         removeItem(selectedId);
         setSelectedId(null);
@@ -1184,7 +990,7 @@ export default function MainCanvas({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [selectedId, tool, currentRouteStep, items, removeItem, updateItem, removeText, removeRoomLabel, texts, roomLabels]);
+  }, [selectedId, tool, currentRouteStep, deleteRouteStep, removeItem, removeText, removeRoomLabel, texts, roomLabels]);
 
   // ── Keyboard shortcuts for tool switching + route step 1–5 ───────────────
   useEffect(() => {
@@ -1312,110 +1118,33 @@ export default function MainCanvas({
     const canvasX   = isStandardBp ? (worldX - 3200) / bpScale + bpOffsetX : worldX;
     const canvasY   = isStandardBp ? (worldY - 1800) / bpScale + bpOffsetY : worldY;
 
-    const data = dragState.operator;
-    dragState.operator = null;
-    console.log("📦 Drag state received:", data);
-    if (!data) return;
+    const { draggingOperator, clearDraggingOperator } = useUIStore.getState();
+    console.log("📦 Drag state received:", draggingOperator);
+    if (!draggingOperator) return;
 
     addItem({
       id: crypto.randomUUID(),
-      operatorId: data.operatorId,
-      iconPath:   data.iconPath,
-      name:       data.name,
-      side:       data.side,
+      operatorId: draggingOperator.operatorId,
+      iconPath:   draggingOperator.iconPath,
+      name:       draggingOperator.name,
+      side:       draggingOperator.side,
       x: canvasX, y: canvasY,
       rotation: 0, scaleX: 1, scaleY: 1,
     });
+    clearDraggingOperator();
   }, [addItem]);
 
-  // ── PDF Export (pure jsPDF — no html2canvas, no DOM cloning) ──────────────
-  const handleExport = async () => {
-    const stage = stageRef.current;
-    if (!stage || isExporting) return;
+  // ── Export hook ─────────────────────────────────────────────────────────────
+  // handleExport (PDF), handleExportGif, handleExportAllPhases, handleExportImage,
+  // isExporting, isExportingGif — and the FloatingExportWindow trigger effects — all live here.
+  const {
+    handleExport,
+    handleExportAllPhases,
+    handleExportImage,
+    isExporting,
+    isExportingGif,
+  } = useCanvasExport({ stageRef });
 
-    setIsExporting(true);
-    try {
-      // ── Page 1: Tactical Board (canvas screenshot) ──────────────────────
-      const dataUrl = stage.toDataURL({ pixelRatio: 2 });
-      console.log("🔥 Konva Snapshot Length:", dataUrl.length);
-
-      const { jsPDF } = await import("jspdf");
-      const mapLabel = [map?.name, currentFloor()?.label].filter(Boolean).join(" · ");
-      const date     = new Date().toLocaleDateString();
-
-      const doc       = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-      const PAGE_W    = 210;
-      const MARGIN    = 14;
-      const CONTENT_W = PAGE_W - MARGIN * 2;
-      let y           = MARGIN;
-
-      // Header — orange accent bar + title
-      doc.setFillColor(...ORANGE);
-      doc.rect(MARGIN, y, 2, 8, "F");
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(18);
-      doc.setTextColor(...DARK);
-      doc.text("R6 Tactical Studio", MARGIN + 5, y + 6);
-      y += 10;
-
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
-      doc.setTextColor(136, 136, 136);
-      doc.text(`${mapLabel}${mapLabel ? "  ·  " : ""}${date}`, MARGIN + 5, y);
-      y += 4;
-
-      // Orange divider
-      doc.setDrawColor(...ORANGE);
-      doc.setLineWidth(0.4);
-      doc.line(MARGIN, y, PAGE_W - MARGIN, y);
-      y += 6;
-
-      // Section label
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(7);
-      doc.setTextColor(...ORANGE);
-      doc.text("TACTICAL BOARD", MARGIN, y);
-      y += 4;
-
-      // Canvas image — fill content width, maintain aspect ratio
-      const imgProps = doc.getImageProperties(dataUrl);
-      const imgH     = (imgProps.height / imgProps.width) * CONTENT_W;
-      doc.addImage(dataUrl, "PNG", MARGIN, y, CONTENT_W, imgH);
-      y += imgH;
-
-      // ── Page 2+: Notes rendered to canvas with system fonts (CJK-safe) ──
-      if (notes) {
-        const notesPages = renderNotesToCanvas(notes, mapLabel, date);
-        for (const pageUrl of notesPages) {
-          doc.addPage();
-          doc.addImage(pageUrl, "PNG", 0, 0, 210, 297);
-        }
-      }
-
-      doc.save(`R6-Tactic-${mapLabel || "Brief"}.pdf`);
-    } catch (err) {
-      console.error("❌ [Export] PDF export failed:", err);
-      alert("Export failed! Check the console for details.");
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  // ── Export requests from FloatingExportWindow ──────────────────────────────
-  useEffect(() => {
-    if (gifExportRequested) handleExportGif();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gifExportRequested]);
-
-  useEffect(() => {
-    if (imageExportRequested) { handleExportImage(); setImageExportRequested(false); }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageExportRequested]);
-
-  useEffect(() => {
-    if (allPhasesExportRequested) { handleExportAllPhases(); setAllPhasesExportRequested(false); }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allPhasesExportRequested]);
 
   // ── Presentation playback — step through route 1→5, then loop back ────────
   const playStepRef = useRef(currentRouteStep);
@@ -1452,16 +1181,6 @@ export default function MainCanvas({
     return () => document.removeEventListener("mousedown", close);
   }, []);
 
-  const handleExportImage = () => {
-    const stage = stageRef.current;
-    if (!stage) return;
-    const dataURL = stage.toDataURL({ pixelRatio: 2 });
-    const a = document.createElement("a");
-    a.href = dataURL;
-    a.download = "R6-Tactic.png";
-    a.click();
-  };
-
   const handleExportMarkdown = () => {
     if (!notes) return;
     const blob = new Blob([notes], { type: "text/markdown" });
@@ -1473,27 +1192,44 @@ export default function MainCanvas({
     URL.revokeObjectURL(url);
   };
 
-  const handleExportJson = () => {
-    const board  = useBoardStore.getState();
-    const canvas = useCanvasStore.getState();
-    const data = {
-      version: "1.2",
-      mapId:          canvas.currentMapId,
-      floorId:        canvas.currentFloorId,
-      items:          board.items,
-      lines:          board.lines,
-      throwableLines: board.throwableLines,
-      texts:          board.texts,
-      notes:          board.notes,
-      routeTimeMap:   board.routeTimeMap,
-      hiddenOperators: board.hiddenOperators,
-      exportedAt:     Date.now(),
+  const handleExportProject = () => {
+    const board   = useBoardStore.getState();
+    const canvas  = useCanvasStore.getState();
+    const { currentProjectId, projectsList } = useProjectStore.getState();
+    const projectName = projectsList.find((p) => p.id === currentProjectId)?.name ?? "Untitled_Project";
+    const sanitizedName = projectName.replace(/[\\/:*?"<>|]/g, "_");
+    const now = Date.now();
+    const mty = {
+      version: "1.0",
+      meta: {
+        id:        currentProjectId ?? crypto.randomUUID(),
+        name:      projectName,
+        mapId:     canvas.currentMapId,
+        updatedAt: now,
+      },
+      payload: {
+        boardState: {
+          items:           board.items,
+          lines:           board.lines,
+          throwableLines:  board.throwableLines,
+          texts:           board.texts,
+          roomLabels:      board.roomLabels,
+          hiddenOperators: board.hiddenOperators,
+          routeTimeMap:    board.routeTimeMap,
+          videoMarkers:    board.videoMarkers,
+          linkedVideoName: board.videoFileName || null,
+        },
+        notes:         board.notes,
+        floorId:       canvas.currentFloorId,
+        activeFloorId: canvas.currentFloorId,
+        activePhase:   board.currentPhase,
+      },
     };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(mty, null, 2)], { type: "application/json" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
     a.href     = url;
-    a.download = "R6_Tactics_Project.json";
+    a.download = `${sanitizedName}.mty`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1545,302 +1281,21 @@ export default function MainCanvas({
   const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    // Reset input so same file can be imported again if needed
     e.target.value = "";
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
-        const data = JSON.parse(ev.target?.result as string);
+        const parsed = JSON.parse(ev.target?.result as string);
+        const data = parsed.payload
+          ? { ...parsed.payload.boardState, notes: parsed.payload.notes, floorId: parsed.payload.floorId, mapId: parsed.meta?.mapId }
+          : parsed;
         useBoardStore.getState().loadProjectData(data);
       } catch {
-        console.error("❌ [Import] Failed to parse JSON project file");
-        alert("Import failed: invalid or corrupted JSON file.");
+        console.error("❌ [Import] Failed to parse .mty project file");
+        alert("Import failed: invalid or corrupted .mty file.");
       }
     };
     reader.readAsText(file);
-  };
-
-  // Loop through phases 1-4, capture each, download as individual PNGs
-  const handleExportAllPhases = async () => {
-    const stage = stageRef.current;
-    if (!stage || isExporting || isExportingGif) return;
-    const savedPhase = currentPhase;
-    setIsExporting(true);
-    try {
-      for (const ph of [1, 2, 3, 4]) {
-        setPhase(ph);
-        await new Promise<void>((r) => setTimeout(r, 300));
-        const dataURL = stage.toDataURL({ pixelRatio: 2 });
-        const a = document.createElement("a");
-        a.href = dataURL;
-        a.download = `R6-Tactic-Phase-${ph}.png`;
-        a.click();
-        await new Promise<void>((r) => setTimeout(r, 200));
-      }
-      setPhase(savedPhase);
-    } catch (err) {
-      console.error("❌ [Export] Multi-phase export failed:", err);
-      setPhase(savedPhase);
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  // Smart GIF pipeline: detects active floors per phase, renders per-floor frames
-  // filtered by exportVisibility, downloads per-phase-per-floor GIFs + merged GIFs.
-  const handleExportGif = async () => {
-    const stage = stageRef.current;
-    if (!stage || isExportingGif || isExporting) return;
-
-    const phases = [...exportPhases].sort((a, b) => a - b);
-    if (phases.length === 0) return;
-
-    setIsExportingGif(true);
-    const savedPhase = currentPhase;
-    const savedStep  = currentRouteStep;
-    const savedFloor = currentFloorId;
-    // 3 hold-frames per step × 5 steps = 15 frames per phase; operator snaps, no lerp
-    const FRAMES_PER_STEP = 3;
-
-    const mapBase   = (map?.name ?? "Tactic").replace(/\s+/g, "");
-    const visSuffix = exportVisibility === "all" ? "" : `_${exportVisibility.toUpperCase()}`;
-
-    // Collect floors active in a given phase (items + lines + throwables)
-    const getActiveFloors = (ph: number): string[] => {
-      const floorSet = new Set<string>();
-      items.filter((i) => i.phase === ph && i.floorId).forEach((i) => floorSet.add(i.floorId!));
-      lines.filter((l) => l.phase === ph && l.floorId).forEach((l) => floorSet.add(l.floorId!));
-      throwableLines.filter((l) => l.phase === ph && l.floorId).forEach((l) => floorSet.add(l.floorId!));
-      // Fallback to current floor when phase has no placed content
-      if (floorSet.size === 0 && savedFloor) floorSet.add(savedFloor);
-      return [...floorSet];
-    };
-
-    // frames keyed as `${phase}-${floorId}` → string[]
-    const phaseFloorFrames = new Map<string, string[]>();
-
-    try {
-      for (const ph of phases) {
-        setPhase(ph);
-        await new Promise<void>((r) => setTimeout(r, 150));
-
-        for (const fid of getActiveFloors(ph)) {
-          setFloor(fid);
-          await new Promise<void>((r) => setTimeout(r, 150));
-
-          const frames: string[] = [];
-          for (let step = 1; step <= 5; step++) {
-            setCurrentRouteStep(step as 1 | 2 | 3 | 4 | 5);
-            for (let f = 0; f < FRAMES_PER_STEP; f++) {
-              await new Promise<void>((r) => setTimeout(r, 80));
-              frames.push(stage.toDataURL({ pixelRatio: 1 }));
-            }
-          }
-          phaseFloorFrames.set(`${ph}-${fid}`, frames);
-        }
-      }
-
-      // Restore view state
-      setPhase(savedPhase);
-      setCurrentRouteStep(savedStep);
-      if (savedFloor) setFloor(savedFloor);
-
-      const { createGIF } = await import("gifshot");
-
-      const triggerGif = (frames: string[], filename: string) =>
-        new Promise<void>((resolve) => {
-          createGIF(
-            { images: frames, gifWidth: stage.width(), gifHeight: stage.height(), interval: 0.12, numWorkers: 2 },
-            (obj) => {
-              if (!obj.error) {
-                const a = document.createElement("a");
-                a.href = obj.image;
-                a.download = filename;
-                a.click();
-              }
-              resolve();
-            },
-          );
-        });
-
-      const floorLabel = (fid: string) =>
-        (map?.floors.find((f) => f.id === fid)?.label ?? fid).replace(/\s+/g, "");
-
-      // Individual phase GIFs — one per active floor
-      for (const ph of phases) {
-        const activeFloors = getActiveFloors(ph);
-        const multiFloor   = activeFloors.length > 1;
-        for (const fid of activeFloors) {
-          const frames = phaseFloorFrames.get(`${ph}-${fid}`) ?? [];
-          const suffix = multiFloor ? `_${floorLabel(fid)}` : "";
-          await triggerGif(frames, `${mapBase}${visSuffix}_Phase${ph}${suffix}.gif`);
-          await new Promise<void>((r) => setTimeout(r, 80));
-        }
-      }
-
-      // Merged GIF if multiple phases selected — one per floor
-      if (phases.length > 1) {
-        const allFloors  = new Set(phases.flatMap((ph) => getActiveFloors(ph)));
-        const multiFloor = allFloors.size > 1;
-        const range      = `${phases[0]}-${phases[phases.length - 1]}`;
-        for (const fid of allFloors) {
-          const allFrames = phases.flatMap((ph) => phaseFloorFrames.get(`${ph}-${fid}`) ?? []);
-          if (allFrames.length === 0) continue;
-          const suffix = multiFloor ? `_${floorLabel(fid)}` : "";
-          await triggerGif(allFrames, `${mapBase}${visSuffix}_Phase${range}${suffix}_Merged.gif`);
-        }
-      }
-    } catch (err) {
-      console.error("❌ [Export] GIF export failed:", err);
-      setPhase(savedPhase);
-      setCurrentRouteStep(savedStep);
-      if (savedFloor) setFloor(savedFloor);
-    } finally {
-      setIsExportingGif(false);
-      setGifExportRequested(false);
-    }
-  };
-
-  // ── Stage mouse events (drawing) ───────────────────────────────────────────
-  // Convert Stage-world pointer position → map-image coordinate space.
-  // In blueprint "standard" mode the image group applies a transform; storing items
-  // at the inverse-transformed coordinates keeps them aligned with the building.
-  const toMapCoords = (stage: Konva.Stage): Vec2 => {
-    const w = toCanvasPos(stage);
-    if (!isStandardBp) return w;
-    return { x: (w.x - 3200) / bpScale + bpOffsetX, y: (w.y - 1800) / bpScale + bpOffsetY };
-  };
-
-  const handleMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
-    const stage = stageRef.current!;
-
-    if (tool === "place_operator" && pendingOperator) {
-      const pos = toMapCoords(stage);
-      addItem({
-        id: crypto.randomUUID(),
-        operatorId: pendingOperator.operatorId,
-        iconPath:   pendingOperator.iconPath,
-        name:       pendingOperator.name,
-        side:       pendingOperator.side,
-        x: pos.x, y: pos.y,
-        rotation: 0, scaleX: 1, scaleY: 1,
-      });
-      // Gadgets (side === "neutral") stay active for continuous placement.
-      // Operators (atk/def) reset to cursor after a single drop.
-      if (pendingOperator.side !== "neutral") {
-        setPendingOperator(null);
-        setTool("cursor");
-      }
-      return;
-    }
-
-    if (tool === "text") {
-      if (e.target === stage) {
-        const pos = toMapCoords(stage);
-        addText({
-          id: crypto.randomUUID(),
-          x: pos.x, y: pos.y,
-          text: "New Text",
-          fontSize: 120,
-          fill: brushColor,
-          rotation: 0, scaleX: 1, scaleY: 1,
-        });
-        setTool("cursor");
-      }
-      return;
-    }
-
-    if (tool === "room_name") {
-      if (e.target === stage) {
-        const pos = toMapCoords(stage);
-        const newId = crypto.randomUUID();
-
-        // 1. 写入 Zustand (加上 currentFloorId 确保楼层隔离)
-        addRoomLabel({
-          id: newId,
-          x: pos.x, y: pos.y,
-          text: "Room",
-          fontSize: 60,
-          fill: "#ffffff",
-          rotation: 0, scaleX: 1, scaleY: 1,
-        }); // floorId injected by store from useCanvasStore.getState().currentFloorId
-
-        // 2. 获取原生屏幕坐标，绕开 Konva 的矩阵缩放
-        const rect = containerRef.current?.getBoundingClientRect();
-        const sx = rect ? e.evt.clientX - rect.left : e.evt.clientX;
-        const sy = rect ? e.evt.clientY - rect.top  : e.evt.clientY;
-
-        console.log("🔥 Room Name Created! Spawning textarea at:", sx, sy);
-
-        // 3. 激活 HTML 文本框并重置鼠标工具
-        setActiveRoomEdit({ id: newId, x: pos.x, y: pos.y, text: "Room", screenX: sx, screenY: sy });
-        setTool("cursor");
-      }
-      return;
-    }
-
-    if (tool === "cursor") {
-      if (e.target === stage) { setSelectedId(null); setResizingItemId(null); setTransformingItemId(null); setCtxMenu(null); }
-      return;
-    }
-    if (tool === "eraser") {
-      if (e.target === stage) { setSelectedId(null); setResizingItemId(null); setTransformingItemId(null); }
-      return;
-    }
-
-    // route: add waypoint at currentRouteStep to currently-selected operator on background click
-    if (tool === "route") {
-      if (e.target === stage && selectedId) {
-        const pos = toMapCoords(stage);
-        addRoutePoint(selectedId, currentRouteStep, { x: pos.x, y: pos.y } as Waypoint);
-      }
-      return;
-    }
-
-    // pen, arrow, throwable: start freehand / line drawing
-    e.evt.preventDefault();
-    isDrawingRef.current = true;
-    const pos = toMapCoords(stage);
-    if (tool === "throwable") {
-      setLiveShape({ type: "throwable", points: [pos.x, pos.y, pos.x, pos.y] });
-    } else {
-      setLiveShape({ type: tool === "arrow" ? "arrow" : "line", points: [pos.x, pos.y, pos.x, pos.y] });
-    }
-  };
-
-  const handleMouseMove = (_e: Konva.KonvaEventObject<MouseEvent>) => {
-    if (!isDrawingRef.current || !liveShape) return;
-    const pos = toMapCoords(stageRef.current!);
-
-    if (liveShape.type === "line" || liveShape.type === "throwable") {
-      // Freehand: append each point
-      setLiveShape((prev) => prev ? { ...prev, points: [...prev.points, pos.x, pos.y] } : null);
-    } else {
-      // Arrow: only track start → current-end
-      setLiveShape((prev) =>
-        prev ? { ...prev, points: [prev.points[0], prev.points[1], pos.x, pos.y] } : null,
-      );
-    }
-  };
-
-  const handleMouseUp = () => {
-    if (!isDrawingRef.current || !liveShape) return;
-    isDrawingRef.current = false;
-
-    if (liveShape.points.length >= 4) {
-      if (liveShape.type === "throwable") {
-        addThrowableLine({ id: crypto.randomUUID(), points: liveShape.points });
-      } else {
-        addLine({
-          id:          crypto.randomUUID(),
-          type:        liveShape.type,
-          points:      liveShape.points,
-          color:       brushColor,
-          strokeWidth: brushSize,
-        });
-      }
-    }
-    setLiveShape(null);
   };
 
   // ── Derived display ────────────────────────────────────────────────────────
@@ -1942,7 +1397,7 @@ export default function MainCanvas({
               points={ln.points}
               stroke={ln.color}
               fill={ln.color}
-              strokeWidth={ln.strokeWidth}
+              strokeWidth={ln.strokeWidth * renderScaleFactor}
               pointerLength={12}
               pointerWidth={10}
               lineCap="round"
@@ -1954,7 +1409,7 @@ export default function MainCanvas({
             <Line key={ln.id}
               points={ln.points}
               stroke={ln.color}
-              strokeWidth={ln.strokeWidth}
+              strokeWidth={ln.strokeWidth * renderScaleFactor}
               lineCap="round"
               lineJoin="round"
               tension={0.4}
@@ -1970,7 +1425,7 @@ export default function MainCanvas({
           <Line key={tl.id}
             points={tl.points}
             stroke={tl.color}
-            strokeWidth={tl.strokeWidth}
+            strokeWidth={tl.strokeWidth * renderScaleFactor}
             dash={[10, 8]}
             tension={0.4}
             lineCap="round"
@@ -1990,16 +1445,27 @@ export default function MainCanvas({
           const upTo           = showFullRoute ? 5 : currentRouteStep;
           const isEraserActive = tool === "eraser";
 
-          // Split the route into same-floor arrow segments so cross-floor jumps are invisible
+          // Transition-aware segment builder:
+          // An edge A→B is rendered on `currentFloorId` only when BOTH A and B are on that floor.
+          // A cross-floor hop silently breaks the current segment; when back on the right floor
+          // after a gap, always start a fresh segment (never connect across the gap).
           const arrowSegments: number[][] = [];
           let seg: number[] = [];
           for (let s = 0; s <= upTo; s++) {
-            const pt = eff[s];
-            if (pt.floorId === currentFloorId) {
-              seg.push(pt.x, pt.y);
-            } else {
+            const pt     = eff[s];
+            const prevPt = s > 0 ? eff[s - 1] : null;
+            if (pt.floorId !== currentFloorId) {
+              // This point is off-floor — close any open segment.
               if (seg.length >= 4) arrowSegments.push(seg);
               seg = [];
+            } else if (prevPt !== null && prevPt.floorId !== currentFloorId) {
+              // Back on the current floor after a cross-floor gap — start fresh here;
+              // do NOT connect to whatever came before the gap.
+              if (seg.length >= 4) arrowSegments.push(seg);
+              seg = [pt.x, pt.y];
+            } else {
+              // Both this point and its predecessor are on the current floor (or s === 0).
+              seg.push(pt.x, pt.y);
             }
           }
           if (seg.length >= 4) arrowSegments.push(seg);
@@ -2142,7 +1608,7 @@ export default function MainCanvas({
     </>
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ), [map, floor, currentFloorId, overlays, currentView, currentMapId, blueprintScaleMode,
-      bpTransformProps, setBuildingCenter,
+      bpTransformProps, renderScaleFactor, setBuildingCenter,
       lines, throwableLines, currentPhase, tool,
       showFullRoute, currentRouteStep, isExportingGif,
       items, selectedId,
@@ -2375,8 +1841,7 @@ export default function MainCanvas({
                 { key: "export_all",       Icon: FileImage, action: () => { setIsExportOpen(false); handleExportAllPhases(); } },
                 { key: "Export Markdown",  Icon: FileText,  action: () => { setIsExportOpen(false); handleExportMarkdown(); } },
                 { key: "GIF Export Settings", Icon: Film,   action: () => { setIsExportOpen(false); setExportWindowOpen(true); } },
-                { key: "save_project",     Icon: FileJson,  action: () => { setIsExportOpen(false); handleExportJson(); } },
-                { key: "load_project",     Icon: Upload,    action: () => { setIsExportOpen(false); jsonImportRef.current?.click(); } },
+                { key: "save_project",     Icon: FileJson,  action: () => { setIsExportOpen(false); handleExportProject(); } },
               ].map(({ key, Icon, action }) => (
                 <button
                   key={key}
@@ -2416,11 +1881,11 @@ export default function MainCanvas({
       {/* Spacer — reserves the toolbar's height in the flex flow */}
       <div className="shrink-0" style={{ height: 41 }} />
 
-      {/* Hidden JSON import input */}
+      {/* Hidden .mty import input */}
       <input
         ref={jsonImportRef}
         type="file"
-        accept=".json"
+        accept=".mty"
         className="hidden"
         onChange={handleImportJson}
       />
@@ -2510,6 +1975,13 @@ export default function MainCanvas({
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}   // cancel drawing if cursor leaves stage
+              onContextMenu={(e) => {
+                if (tool === "place_operator" && pendingOperator) {
+                  e.evt.preventDefault();
+                  setPendingOperator(null);
+                  setTool("cursor");
+                }
+              }}
             >
               {staticLayers}
 
@@ -2518,7 +1990,6 @@ export default function MainCanvas({
               <Layer>
                 <KonvaGroup {...bpTransformProps}>
                   {(() => {
-                    const viewScaleMultiplier = (currentView === "isometric" ? 0.4 : 1.0) / bpScale;
                     const floorLabelMap: Record<string, string> = Object.fromEntries(
                       (map?.floors ?? []).map((f) => [f.id, f.label])
                     );
@@ -2538,7 +2009,7 @@ export default function MainCanvas({
                           currentRouteStep={currentRouteStep}
                           playbackRowIndex={playbackRowIndex}
                           routeTimeMap={routeTimeMap}
-                          viewScaleMultiplier={viewScaleMultiplier}
+                          viewScaleMultiplier={renderScaleFactor}
                           floorLabelMap={floorLabelMap}
                           handleSelectOperator={handleSelectOperator}
                           updateItem={updateItem}
@@ -2560,7 +2031,7 @@ export default function MainCanvas({
                       points={liveShape.points}
                       stroke={brushColor}
                       fill={brushColor}
-                      strokeWidth={brushSize}
+                      strokeWidth={brushSize * renderScaleFactor}
                       pointerLength={12}
                       pointerWidth={10}
                       lineCap="round"
@@ -2572,7 +2043,7 @@ export default function MainCanvas({
                     <Line
                       points={liveShape.points}
                       stroke={brushColor}
-                      strokeWidth={brushSize}
+                      strokeWidth={brushSize * renderScaleFactor}
                       lineCap="round"
                       lineJoin="round"
                       tension={0.4}
@@ -2584,7 +2055,7 @@ export default function MainCanvas({
                     <Line
                       points={liveShape.points}
                       stroke={throwableColor}
-                      strokeWidth={throwableSize}
+                      strokeWidth={throwableSize * renderScaleFactor}
                       dash={[10, 8]}
                       tension={0.4}
                       lineCap="round"

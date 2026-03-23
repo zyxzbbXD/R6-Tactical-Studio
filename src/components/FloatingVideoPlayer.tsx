@@ -4,7 +4,7 @@ import {
   GripHorizontal, X, FolderOpen,
   Play, Pause, Volume2, Volume1, VolumeX, Scan,
   Square, Maximize2, Expand,
-  ChevronLeft, ChevronRight, Download,
+  ChevronLeft, ChevronRight, Download, AlertTriangle, Link,
 } from "lucide-react";
 import { useBoardStore } from "../store/useBoardStore";
 import { useSettingsStore } from "../store/useSettingsStore";
@@ -532,6 +532,26 @@ export default function FloatingVideoPlayer() {
               onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime ?? 0)}
               onLoadedMetadata={() => setDuration(videoRef.current?.duration ?? 0)}
             />
+          ) : storeVideoFileName ? (
+            /* ── Media Offline ───────────────────────────────────────────── */
+            <div className="flex flex-col items-center gap-3 px-8 py-6 text-center">
+              <AlertTriangle size={38} className="text-amber-400 shrink-0" />
+              <span className="text-[15px] font-semibold text-amber-400">
+                媒体离线 (Media Offline)
+              </span>
+              <span className="text-[13px] text-r6-muted leading-snug">
+                当前战术板需要视频
+                <br />
+                <span className="font-mono text-amber-300 break-all">{storeVideoFileName}</span>
+              </span>
+              <button
+                onClick={() => fileRef.current?.click()}
+                className="mt-1 flex items-center gap-2 rounded-xl px-4 py-2 text-[13px] font-bold transition-colors border border-amber-500/50 bg-amber-500/15 text-amber-400 hover:bg-amber-500/25"
+              >
+                <Link size={14} />
+                重链接 (Relink Video)
+              </button>
+            </div>
           ) : (
             <button
               onClick={() => fileRef.current?.click()}

@@ -1,6 +1,7 @@
 import { Eye, EyeOff, Scaling, Play, Pause } from "lucide-react";
 import { useBoardStore } from "../store/useBoardStore";
 import type { Tool } from "../store/useBoardStore";
+import { useUIStore } from "../store/useUIStore";
 import { cn } from "../utils/cn";
 
 const BRUSH_SWATCHES = [
@@ -23,11 +24,14 @@ export default function TacticalPanel({ activeTool }: { activeTool: Tool }) {
   const {
     currentRouteStep, setCurrentRouteStep,
     showFullRoute, setShowFullRoute,
-    brushColor, brushSize, setBrushStyle,
-    throwableColor, throwableSize, setThrowableStyle,
     resizingItemId, items, updateItem,
     isPlaying, setIsPlaying,
   } = useBoardStore();
+
+  const {
+    brushColor, brushSize, setBrushStyle,
+    throwableColor, throwableSize, setThrowableStyle,
+  } = useUIStore();
 
   const resizingItem = resizingItemId ? items.find((i) => i.id === resizingItemId) : null;
 

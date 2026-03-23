@@ -8,7 +8,7 @@
     "opener:default",
     {
       "identifier": "fs:allow-read-text-file",
-      "allow": [{ "path": "$APPDATA/**" }]
+      "allow": [{ "path": "$APPDATA/**" }, { "path": "$HOME/**" }]
     },
     {
       "identifier": "fs:allow-write-text-file",
@@ -29,6 +29,7 @@
     {
       "identifier": "fs:allow-remove",
       "allow": [{ "path": "$APPDATA/**" }]
-    }
+    },
+    "dialog:allow-open"
   ]
 }

@@ -4,8 +4,8 @@
  * All project I/O goes through this file.
  *
  * File layout under $APPDATA/R6TacticalStudio/:
- *   {id}_meta.json  — board state, map/floor selection, timestamps
- *   {id}_notes.md   — plain markdown tactical notes
+ *   projects_index.json — lightweight array of ProjectMeta (O(1) list reads)
+ *   {id}.mty            — single-file project: version + meta + boardState + notes
  *
  * Tauri v2 plugin-fs is used for every fs operation so the app stays
  * sandboxed within the AppData scope declared in capabilities/default.json.
@@ -13,16 +13,44 @@
 
 import {
   mkdir,
-  readDir,
   readTextFile,
   writeTextFile,
   exists,
   remove,
   BaseDirectory,
 } from "@tauri-apps/plugin-fs";
-import type { BoardItem, DrawnLine } from "../store/useBoardStore";
+import type {
+  BoardItem,
+  DrawnLine,
+  ThrowableLine,
+  TextNode,
+  RoomLabel,
+  VideoMarker,
+} from "../store/useBoardStore";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+/** Lightweight metadata stored in the global index and used by the sidebar. */
+export interface ProjectMeta {
+  id: string;
+  name: string;
+  mapId: string | null;
+  updatedAt: number; // unix ms
+}
+
+/** Complete board state that is persisted inside a .mty file. */
+export interface PersistedBoardState {
+  items:            BoardItem[];
+  lines:            DrawnLine[];
+  throwableLines:   ThrowableLine[];
+  texts:            TextNode[];
+  roomLabels:       RoomLabel[];
+  hiddenOperators:  string[];
+  routeTimeMap:     Record<string, Record<number, number>>;
+  videoMarkers:     VideoMarker[];
+  /** Original filename of the video linked to this board, used for Media-Offline detection on load. */
+  linkedVideoName:  string | null;
+}
 
 /** Full project state (board + notes combined). */
 export interface ProjectData {
@@ -30,46 +58,59 @@ export interface ProjectData {
   name: string;
   mapId: string | null;
   floorId: string | null;
-  boardState: {
-    items: BoardItem[];
-    lines: DrawnLine[];
-  };
+  /** The floor that was active when the project was last saved. */
+  activeFloorId: string | null;
+  /** The phase (1-4) that was active when the project was last saved. */
+  activePhase: number;
+  boardState: PersistedBoardState;
   notes: string;
   updatedAt: number; // unix ms
 }
 
-/**
- * What is persisted in {id}_meta.json.
- * Notes are NOT stored here — they live in {id}_notes.md.
- */
-interface MetaFile {
-  id: string;
-  name: string;
-  mapId: string | null;
-  floorId: string | null;
-  boardState: {
-    items: BoardItem[];
-    lines: DrawnLine[];
+/** On-disk format for a .mty file. */
+interface MtyFile {
+  version: string;
+  meta: ProjectMeta;
+  payload: {
+    boardState: PersistedBoardState;
+    notes: string;
+    floorId: string | null;
+    /** Active floor at save time — used to restore viewport on load. */
+    activeFloorId: string | null;
+    /** Active phase (1-4) at save time — used to restore viewport on load. */
+    activePhase: number;
   };
-  updatedAt: number;
-}
-
-/** Lightweight version stored in the list sidebar (no boardState / notes). */
-export interface ProjectMeta {
-  id: string;
-  name: string;
-  mapId: string | null;
-  updatedAt: number;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const DIR = "R6TacticalStudio";
+const MTY_VERSION = "1.0";
+const DIR         = "R6TacticalStudio";
+const INDEX_PATH  = `${DIR}/projects_index.json`;
 
 // ─── Path helpers ─────────────────────────────────────────────────────────────
 
-function metaPath(id: string)  { return `${DIR}/${id}_meta.json`; }
-function notesPath(id: string) { return `${DIR}/${id}_notes.md`;  }
+function mtyPath(id: string) { return `${DIR}/${id}.mty`; }
+
+// ─── Index helpers ────────────────────────────────────────────────────────────
+
+async function readIndex(): Promise<ProjectMeta[]> {
+  try {
+    const indexExists = await exists(INDEX_PATH, { baseDir: BaseDirectory.AppData });
+    if (!indexExists) return [];
+    const raw = await readTextFile(INDEX_PATH, { baseDir: BaseDirectory.AppData });
+    return JSON.parse(raw) as ProjectMeta[];
+  } catch (err) {
+    console.warn(`[PM] Could not read index — returning []:`, err);
+    return [];
+  }
+}
+
+async function writeIndex(index: ProjectMeta[]): Promise<void> {
+  await writeTextFile(INDEX_PATH, JSON.stringify(index, null, 2), {
+    baseDir: BaseDirectory.AppData,
+  });
+}
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
@@ -95,36 +136,45 @@ export async function initProjectDir(): Promise<void> {
 }
 
 /**
- * Persist a project to disk.
- * Writes {id}_meta.json and {id}_notes.md independently.
+ * Persist a project to disk as a single {id}.mty file,
+ * then upsert its metadata in projects_index.json.
  */
 export async function saveProject(data: ProjectData): Promise<void> {
-  const mp = metaPath(data.id);
-  const np = notesPath(data.id);
+  const path = mtyPath(data.id);
   console.log(`[PM] saveProject id=${data.id} name="${data.name}"`);
-  console.log(`[PM]   meta  → $APPDATA/${mp}`);
-  console.log(`[PM]   notes → $APPDATA/${np}`);
+
+  const mty: MtyFile = {
+    version: MTY_VERSION,
+    meta: {
+      id:        data.id,
+      name:      data.name,
+      mapId:     data.mapId,
+      updatedAt: data.updatedAt,
+    },
+    payload: {
+      boardState:    data.boardState,
+      notes:         data.notes ?? "",
+      floorId:       data.floorId,
+      activeFloorId: data.activeFloorId,
+      activePhase:   data.activePhase,
+    },
+  };
 
   try {
-    // ── Write meta ──────────────────────────────────────────────────────────
-    const meta: MetaFile = {
-      id:         data.id,
-      name:       data.name,
-      mapId:      data.mapId,
-      floorId:    data.floorId,
-      boardState: data.boardState,
-      updatedAt:  data.updatedAt,
-    };
-    await writeTextFile(mp, JSON.stringify(meta, null, 2), {
+    await writeTextFile(path, JSON.stringify(mty, null, 2), {
       baseDir: BaseDirectory.AppData,
     });
-    console.log(`[PM] ✓ meta written (${JSON.stringify(meta).length} bytes)`);
+    console.log(`[PM] ✓ .mty written`);
 
-    // ── Write notes ─────────────────────────────────────────────────────────
-    await writeTextFile(np, data.notes ?? "", {
-      baseDir: BaseDirectory.AppData,
-    });
-    console.log(`[PM] ✓ notes written (${(data.notes ?? "").length} chars)`);
+    // ── Upsert entry in global index ─────────────────────────────────────
+    const index   = await readIndex();
+    const idx     = index.findIndex((m) => m.id === data.id);
+    const updated = idx >= 0
+      ? [...index.slice(0, idx), mty.meta, ...index.slice(idx + 1)]
+      : [...index, mty.meta];
+    updated.sort((a, b) => b.updatedAt - a.updatedAt);
+    await writeIndex(updated);
+    console.log(`[PM] ✓ index updated (${updated.length} project(s))`);
   } catch (err) {
     console.error(`[PM] ❌ saveProject failed for id=${data.id}:`, err);
     throw err;
@@ -132,50 +182,50 @@ export async function saveProject(data: ProjectData): Promise<void> {
 }
 
 /**
- * Load a project from disk by id.
- * Returns null if the meta file doesn't exist or JSON is malformed.
- * A missing notes file is treated as empty string (not an error).
+ * Load a project from its {id}.mty file.
+ * Returns null if the file doesn't exist or JSON is malformed.
  */
 export async function loadProject(id: string): Promise<ProjectData | null> {
-  const mp = metaPath(id);
-  const np = notesPath(id);
+  const path = mtyPath(id);
   console.log(`[PM] loadProject id=${id}`);
-  console.log(`[PM]   meta  → $APPDATA/${mp}`);
-  console.log(`[PM]   notes → $APPDATA/${np}`);
 
   try {
-    // ── Read meta ───────────────────────────────────────────────────────────
-    const metaExists = await exists(mp, { baseDir: BaseDirectory.AppData });
-    if (!metaExists) {
-      console.warn(`[PM] meta file not found for id=${id}`);
+    const fileExists = await exists(path, { baseDir: BaseDirectory.AppData });
+    if (!fileExists) {
+      console.warn(`[PM] .mty file not found for id=${id}`);
       return null;
     }
-    const rawMeta = await readTextFile(mp, { baseDir: BaseDirectory.AppData });
-    const meta = JSON.parse(rawMeta) as MetaFile;
-    console.log(`[PM] ✓ meta loaded: name="${meta.name}"`);
 
-    // ── Read notes (optional) ───────────────────────────────────────────────
-    let notes = "";
-    try {
-      const notesExists = await exists(np, { baseDir: BaseDirectory.AppData });
-      if (notesExists) {
-        notes = await readTextFile(np, { baseDir: BaseDirectory.AppData });
-        console.log(`[PM] ✓ notes loaded (${notes.length} chars)`);
-      } else {
-        console.log(`[PM] notes file absent — defaulting to ""`);
-      }
-    } catch (notesErr) {
-      console.warn(`[PM] Could not read notes for id=${id} — defaulting to "":`, notesErr);
-    }
+    const raw = await readTextFile(path, { baseDir: BaseDirectory.AppData });
+    const mty = JSON.parse(raw) as MtyFile;
+    console.log(`[PM] ✓ .mty loaded: name="${mty.meta.name}"`);
 
+    // Backwards-compat: old files may lack fields added in later versions.
+    const bs = mty.payload.boardState as Partial<PersistedBoardState> | undefined;
+    const items = bs?.items as Array<{ floorId?: string; phase?: number }> | undefined;
+    const boardState: PersistedBoardState = {
+      items:           Array.isArray(bs?.items)           ? bs!.items!           : [],
+      lines:           Array.isArray(bs?.lines)           ? bs!.lines!           : [],
+      throwableLines:  Array.isArray(bs?.throwableLines)  ? bs!.throwableLines!  : [],
+      texts:           Array.isArray(bs?.texts)           ? bs!.texts!           : [],
+      roomLabels:      Array.isArray(bs?.roomLabels)      ? bs!.roomLabels!      : [],
+      hiddenOperators: Array.isArray(bs?.hiddenOperators) ? bs!.hiddenOperators! : [],
+      routeTimeMap:    (bs?.routeTimeMap && typeof bs.routeTimeMap === "object")
+                         ? bs.routeTimeMap
+                         : {},
+      videoMarkers:    Array.isArray(bs?.videoMarkers)    ? bs!.videoMarkers!    : [],
+      linkedVideoName: typeof bs?.linkedVideoName === "string" ? bs.linkedVideoName : null,
+    };
     return {
-      id:         meta.id,
-      name:       meta.name,
-      mapId:      meta.mapId,
-      floorId:    meta.floorId,
-      boardState: meta.boardState,
-      notes,
-      updatedAt:  meta.updatedAt,
+      id:            mty.meta.id,
+      name:          mty.meta.name,
+      mapId:         mty.meta.mapId,
+      floorId:       mty.payload.floorId,
+      activeFloorId: mty.payload.activeFloorId ?? mty.payload.floorId ?? items?.[0]?.floorId ?? null,
+      activePhase:   mty.payload.activePhase   ?? items?.[0]?.phase   ?? 1,
+      boardState,
+      notes:         mty.payload.notes ?? "",
+      updatedAt:     mty.meta.updatedAt,
     };
   } catch (err) {
     console.error(`[PM] ❌ loadProject failed for id=${id}:`, err);
@@ -184,55 +234,44 @@ export async function loadProject(id: string): Promise<ProjectData | null> {
 }
 
 /**
- * Return metadata for every project in the folder, newest-first.
- * Reads only *_meta.json files.
+ * Return metadata for every project, newest-first.
+ * Reads only the lightweight projects_index.json — O(1) regardless of
+ * how many projects exist.
  */
 export async function listProjects(): Promise<ProjectMeta[]> {
-  console.log(`[PM] listProjects — scanning $APPDATA/${DIR}/`);
-  try {
-    const entries = await readDir(DIR, { baseDir: BaseDirectory.AppData });
-    const metas: ProjectMeta[] = [];
-
-    for (const entry of entries) {
-      if (!entry.name?.endsWith("_meta.json")) continue;
-      try {
-        const raw  = await readTextFile(`${DIR}/${entry.name}`, { baseDir: BaseDirectory.AppData });
-        const data = JSON.parse(raw) as MetaFile;
-        metas.push({ id: data.id, name: data.name, mapId: data.mapId, updatedAt: data.updatedAt });
-      } catch (e) {
-        console.warn(`[PM] Skipping corrupt meta file "${entry.name}":`, e);
-      }
-    }
-
-    metas.sort((a, b) => b.updatedAt - a.updatedAt);
-    console.log(`[PM] ✓ found ${metas.length} project(s)`);
-    return metas;
-  } catch (err) {
-    console.error(`[PM] ❌ listProjects failed:`, err);
-    return [];
-  }
+  console.log(`[PM] listProjects — reading index`);
+  const index = await readIndex();
+  index.sort((a, b) => b.updatedAt - a.updatedAt);
+  console.log(`[PM] ✓ found ${index.length} project(s)`);
+  return index;
 }
 
 /**
- * Delete both files for a project (ignore "not found" errors).
+ * Delete {id}.mty and remove its entry from projects_index.json.
  */
 export async function deleteProject(id: string): Promise<void> {
-  const mp = metaPath(id);
-  const np = notesPath(id);
+  const path = mtyPath(id);
   console.log(`[PM] deleteProject id=${id}`);
 
-  for (const path of [mp, np]) {
-    try {
-      const fileExists = await exists(path, { baseDir: BaseDirectory.AppData });
-      if (fileExists) {
-        await remove(path, { baseDir: BaseDirectory.AppData });
-        console.log(`[PM] ✓ deleted $APPDATA/${path}`);
-      } else {
-        console.log(`[PM] skip (not found): $APPDATA/${path}`);
-      }
-    } catch (err) {
-      // Non-fatal — log and continue
-      console.warn(`[PM] Could not delete $APPDATA/${path}:`, err);
+  try {
+    const fileExists = await exists(path, { baseDir: BaseDirectory.AppData });
+    if (fileExists) {
+      await remove(path, { baseDir: BaseDirectory.AppData });
+      console.log(`[PM] ✓ deleted $APPDATA/${path}`);
+    } else {
+      console.log(`[PM] skip (not found): $APPDATA/${path}`);
     }
+  } catch (err) {
+    console.warn(`[PM] Could not delete $APPDATA/${path}:`, err);
+  }
+
+  // ── Remove from index ──────────────────────────────────────────────────
+  try {
+    const index   = await readIndex();
+    const updated = index.filter((m) => m.id !== id);
+    await writeIndex(updated);
+    console.log(`[PM] ✓ index updated after delete (${updated.length} project(s))`);
+  } catch (err) {
+    console.warn(`[PM] Could not update index after delete for id=${id}:`, err);
   }
 }

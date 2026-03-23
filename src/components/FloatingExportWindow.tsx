@@ -3,6 +3,7 @@ import Draggable from "react-draggable";
 import { Film, GripHorizontal, X, FileImage, Video, FileText, Zap, Download } from "lucide-react";
 import { useBoardStore } from "../store/useBoardStore";
 import { useCanvasStore } from "../store/canvasStore";
+import { useProjectStore } from "../store/useProjectStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { t } from "../locales/i18n";
 import { cn } from "../utils/cn";
@@ -45,24 +46,41 @@ export default function FloatingExportWindow() {
   const handleSaveProject = () => {
     const board  = useBoardStore.getState();
     const canvas = useCanvasStore.getState();
-    const data = {
-      version: "1.2",
-      mapId:          canvas.currentMapId,
-      floorId:        canvas.currentFloorId,
-      items:          board.items,
-      lines:          board.lines,
-      throwableLines: board.throwableLines,
-      texts:          board.texts,
-      notes:          board.notes,
-      routeTimeMap:   board.routeTimeMap,
-      hiddenOperators: board.hiddenOperators,
-      exportedAt:     Date.now(),
+    const { currentProjectId, projectsList } = useProjectStore.getState();
+    const projectName   = projectsList.find((p) => p.id === currentProjectId)?.name ?? "Untitled_Project";
+    const sanitizedName = projectName.replace(/[\\/:*?"<>|]/g, "_");
+    const now  = Date.now();
+    const mty = {
+      version: "1.0",
+      meta: {
+        id:        currentProjectId ?? crypto.randomUUID(),
+        name:      projectName,
+        mapId:     canvas.currentMapId,
+        updatedAt: now,
+      },
+      payload: {
+        boardState: {
+          items:           board.items,
+          lines:           board.lines,
+          throwableLines:  board.throwableLines,
+          texts:           board.texts,
+          roomLabels:      board.roomLabels,
+          hiddenOperators: board.hiddenOperators,
+          routeTimeMap:    board.routeTimeMap,
+          videoMarkers:    board.videoMarkers,
+          linkedVideoName: board.videoFileName || null,
+        },
+        notes:         board.notes,
+        floorId:       canvas.currentFloorId,
+        activeFloorId: canvas.currentFloorId,
+        activePhase:   board.currentPhase,
+      },
     };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(mty, null, 2)], { type: "application/json" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
     a.href     = url;
-    a.download = `R6_Tactics_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `${sanitizedName}.mty`;
     a.click();
     URL.revokeObjectURL(url);
   };

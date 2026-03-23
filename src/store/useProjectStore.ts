@@ -21,6 +21,7 @@ import {
 } from "../utils/projectManager";
 import { useBoardStore } from "./useBoardStore";
 import { useCanvasStore } from "./canvasStore";
+import { useUIStore } from "./useUIStore";
 
 // ─── State shape ─────────────────────────────────────────────────────────────
 
@@ -31,6 +32,8 @@ interface ProjectState {
   currentProjectId: string | null;
   /** True while any async fs operation is running. */
   isBusy: boolean;
+  /** True while a save is in-flight — used to prevent concurrent save corruption. */
+  isSavingProcess: boolean;
   /** Last save timestamp shown in the toolbar (null = never saved). */
   lastSavedAt: number | null;
 
@@ -42,7 +45,19 @@ interface ProjectState {
   loadProject: (id: string) => Promise<void>;
   saveCurrentProject: () => Promise<void>;
   renameCurrentProject: (name: string) => Promise<void>;
+  renameProject: (id: string, newName: string) => Promise<void>;
   deleteProject: (id: string) => Promise<void>;
+  /** Install an externally-loaded .mty file into the local workspace. */
+  installImportedProject: (mty: {
+    meta: { id: string; name: string; mapId: string | null; updatedAt: number };
+    payload: {
+      boardState: { items: unknown[]; lines: unknown[] };
+      notes: string;
+      floorId: string | null;
+      activeFloorId?: string | null;
+      activePhase?: number;
+    };
+  }) => Promise<void>;
 }
 
 // ─── Store ───────────────────────────────────────────────────────────────────
@@ -51,6 +66,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   projectsList: [],
   currentProjectId: null,
   isBusy: false,
+  isSavingProcess: false,
   lastSavedAt: null,
 
   // ── init ────────────────────────────────────────────────────────────────────
@@ -90,12 +106,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
       const data: ProjectData = {
         id,
-        name:       trimmed,
-        mapId:      null,
-        floorId:    null,
-        boardState: { items: [], lines: [] },
-        notes:      "",
-        updatedAt:  now,
+        name:          trimmed,
+        mapId:         null,
+        floorId:       null,
+        activeFloorId: null,
+        activePhase:   1,
+        boardState: {
+          items: [], lines: [], throwableLines: [], texts: [],
+          roomLabels: [], hiddenOperators: [], routeTimeMap: {}, videoMarkers: [],
+          linkedVideoName: null,
+        },
+        notes:         "",
+        updatedAt:     now,
       };
 
       await saveProject(data);
@@ -127,25 +149,29 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         return;
       }
 
-      // Push state into board store
+      // Resolve the viewport to restore (with backwards-compat fallback)
+      const items0 = data.boardState.items[0] as { floorId?: string; phase?: number } | undefined;
+      const targetFloor: string | null = data.activeFloorId ?? data.floorId ?? items0?.floorId ?? null;
+      const targetPhase: number        = data.activePhase   ?? items0?.phase   ?? 1;
+
+      // Push ALL board state in one shot (reuses loadProjectData's safe-fallback logic)
       const board = useBoardStore.getState();
-      board.clearAll();
-      data.boardState.items.forEach((item) => board.addItem(item));
-      data.boardState.lines.forEach((line) => board.addLine(line));
-      board.setNotes(data.notes);
-      console.log(`[ProjectStore] ✓ board restored: ${data.boardState.items.length} items, ${data.boardState.lines.length} lines`);
+      board.loadProjectData({ ...data.boardState, notes: data.notes });
+      board.setPhase(targetPhase);
+      console.log(`[ProjectStore] ✓ board restored: ${data.boardState.items.length} items, phase=${targetPhase}`);
 
       // Push map / floor into canvas store atomically
       const canvas = useCanvasStore.getState();
       if (data.mapId) {
-        if (data.floorId) canvas.setMapAndFloor(data.mapId, data.floorId);
+        if (targetFloor) canvas.setMapAndFloor(data.mapId, targetFloor);
         else canvas.setMap(data.mapId);
-        console.log(`[ProjectStore] ✓ canvas set: map=${data.mapId} floor=${data.floorId}`);
+        console.log(`[ProjectStore] ✓ canvas set: map=${data.mapId} floor=${targetFloor}`);
       } else {
         canvas.setMap("");
       }
 
       set({ currentProjectId: id, lastSavedAt: data.updatedAt });
+      useUIStore.getState().setTool("cursor");
       console.log(`[ProjectStore] ✓ loadProject complete`);
     } catch (err) {
       console.error(`[ProjectStore] ❌ loadProject failed for id=${id}:`, err);
@@ -157,13 +183,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   // ── saveCurrentProject ──────────────────────────────────────────────────────
 
   saveCurrentProject: async () => {
-    const { currentProjectId } = get();
+    const { currentProjectId, isSavingProcess } = get();
     if (!currentProjectId) {
       console.warn("[ProjectStore] saveCurrentProject — no project open, skipping");
       return;
     }
+    if (isSavingProcess) {
+      console.warn("[ProjectStore] saveCurrentProject — save already in-flight, skipping");
+      return;
+    }
+
     console.log(`[ProjectStore] saveCurrentProject id=${currentProjectId}`);
-    set({ isBusy: true });
+    set({ isBusy: true, isSavingProcess: true });
     try {
       const board  = useBoardStore.getState();
       const canvas = useCanvasStore.getState();
@@ -178,11 +209,23 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const now = Date.now();
       const data: ProjectData = {
         ...existing,
-        mapId:      canvas.currentMapId,
-        floorId:    canvas.currentFloorId,
-        boardState: { items: board.items, lines: board.lines },
-        notes:      board.notes,
-        updatedAt:  now,
+        mapId:         canvas.currentMapId,
+        floorId:       canvas.currentFloorId,
+        activeFloorId: canvas.currentFloorId,
+        activePhase:   board.currentPhase,
+        boardState: {
+          items:           board.items,
+          lines:           board.lines,
+          throwableLines:  board.throwableLines,
+          texts:           board.texts,
+          roomLabels:      board.roomLabels,
+          hiddenOperators: board.hiddenOperators,
+          routeTimeMap:    board.routeTimeMap,
+          videoMarkers:    board.videoMarkers,
+          linkedVideoName: board.videoFileName || null,
+        },
+        notes:         board.notes,
+        updatedAt:     now,
       };
 
       await saveProject(data);
@@ -192,7 +235,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     } catch (err) {
       console.error("[ProjectStore] ❌ saveCurrentProject failed:", err);
     } finally {
-      set({ isBusy: false });
+      set({ isBusy: false, isSavingProcess: false });
     }
   },
 
@@ -211,6 +254,102 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       console.log(`[ProjectStore] ✓ rename complete`);
     } catch (err) {
       console.error("[ProjectStore] ❌ renameCurrentProject failed:", err);
+    } finally {
+      set({ isBusy: false });
+    }
+  },
+
+  // ── renameProject ────────────────────────────────────────────────────────────
+
+  renameProject: async (id: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    console.log(`[ProjectStore] renameProject id=${id} name="${trimmed}"`);
+    set({ isBusy: true });
+    try {
+      const existing = await loadProject(id);
+      if (!existing) return;
+      await saveProject({ ...existing, name: trimmed, updatedAt: Date.now() });
+      await get().refreshList();
+      console.log(`[ProjectStore] ✓ renameProject complete`);
+    } catch (err) {
+      console.error("[ProjectStore] ❌ renameProject failed:", err);
+    } finally {
+      set({ isBusy: false });
+    }
+  },
+
+  // ── installImportedProject ───────────────────────────────────────────────────
+
+  installImportedProject: async (mty) => {
+    console.log(`[ProjectStore] installImportedProject id=${mty.meta.id}`);
+    set({ isBusy: true });
+    try {
+      const { projectsList } = get();
+      const now = Date.now();
+
+      // Collision guard: give a fresh ID + suffix when the same UUID already exists locally
+      const idExists = projectsList.some((p) => p.id === mty.meta.id);
+      const id   = idExists ? crypto.randomUUID() : mty.meta.id;
+      const name = idExists ? `${mty.meta.name} (Imported)` : mty.meta.name;
+
+      // Resolve the viewport to restore (backwards-compat: old files lack activeFloorId/activePhase)
+      const items0 = (mty.payload.boardState.items[0] as { floorId?: string; phase?: number } | undefined);
+      const targetFloor: string | null = mty.payload.activeFloorId ?? mty.payload.floorId ?? items0?.floorId ?? null;
+      const targetPhase: number        = mty.payload.activePhase   ?? items0?.phase        ?? 1;
+
+      // Safe-coerce the imported boardState — old files may lack newer fields
+      const rawBs = mty.payload.boardState as Partial<ProjectData["boardState"]> | undefined;
+      const boardState: ProjectData["boardState"] = {
+        items:           Array.isArray(rawBs?.items)           ? rawBs!.items!           : [],
+        lines:           Array.isArray(rawBs?.lines)           ? rawBs!.lines!           : [],
+        throwableLines:  Array.isArray(rawBs?.throwableLines)  ? rawBs!.throwableLines!  : [],
+        texts:           Array.isArray(rawBs?.texts)           ? rawBs!.texts!           : [],
+        roomLabels:      Array.isArray(rawBs?.roomLabels)      ? rawBs!.roomLabels!      : [],
+        hiddenOperators: Array.isArray(rawBs?.hiddenOperators) ? rawBs!.hiddenOperators! : [],
+        routeTimeMap:    (rawBs?.routeTimeMap && typeof rawBs.routeTimeMap === "object")
+                           ? rawBs.routeTimeMap
+                           : {},
+        videoMarkers:    Array.isArray(rawBs?.videoMarkers)    ? rawBs!.videoMarkers!    : [],
+        linkedVideoName: typeof rawBs?.linkedVideoName === "string" ? rawBs.linkedVideoName : null,
+      };
+
+      const data: ProjectData = {
+        id,
+        name,
+        mapId:         mty.meta.mapId,
+        floorId:       mty.payload.floorId,
+        activeFloorId: targetFloor,
+        activePhase:   targetPhase,
+        boardState,
+        notes:         mty.payload.notes ?? "",
+        updatedAt:     now,
+      };
+
+      // 1. Write .mty to disk
+      await saveProject(data);
+      console.log(`[ProjectStore] ✓ imported project written id=${id}`);
+
+      // 2. Push ALL board state in one shot
+      const board = useBoardStore.getState();
+      board.loadProjectData({ ...data.boardState, notes: data.notes });
+      board.setPhase(targetPhase);
+
+      // 3. Push canvas state
+      const canvas = useCanvasStore.getState();
+      if (data.mapId && targetFloor) canvas.setMapAndFloor(data.mapId, targetFloor);
+      else if (data.mapId) canvas.setMap(data.mapId);
+      else canvas.setMap("");
+
+      // 4. Mark as active project
+      set({ currentProjectId: id, lastSavedAt: now });
+      useUIStore.getState().setTool("cursor");
+
+      // 5. Refresh sidebar list
+      await get().refreshList();
+      console.log(`[ProjectStore] ✓ installImportedProject complete`);
+    } catch (err) {
+      console.error("[ProjectStore] ❌ installImportedProject failed:", err);
     } finally {
       set({ isBusy: false });
     }
