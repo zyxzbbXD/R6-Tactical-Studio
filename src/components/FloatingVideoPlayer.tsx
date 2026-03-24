@@ -237,6 +237,8 @@ export default function FloatingVideoPlayer() {
 
     // Local staging array — markers are collected here and committed atomically at the end
     const localMarkers: { time: number; label: string }[] = [];
+    // All video timestamps where OCR returned a valid remaining time (used for Prep Phase gate)
+    const validHits: number[] = [];
 
     v.pause();
     setIsPlaying(false);
@@ -302,6 +304,18 @@ export default function FloatingVideoPlayer() {
       return result;
     };
 
+    // 1-second precision scan for "first null" within a small window — used for natural round ends
+    const scanRoundEnd = async (from: number, to: number): Promise<number> => {
+      const lo = Math.ceil(from);
+      const hi = Math.min(Math.floor(to), Math.floor(videoDuration));
+      for (let s = lo; s <= hi; s++) {
+        await seekTo(s);
+        const { remaining } = await ocrFrame();
+        if (remaining === null) return s;
+      }
+      return hi;
+    };
+
     // Candidate round: buffered until 40 s of stable, drift-free signal confirms it's a real round
     interface CandidateRound {
       actionStart:       number;
@@ -350,6 +364,7 @@ export default function FloatingVideoPlayer() {
       } else if (remaining !== null) {
         const inferredStart = t2 - (180 - remaining);
         const isPartial     = inferredStart < 0;
+        validHits.push(t2); // record every clean OCR hit for Prep Phase gate
 
         if (activeRound) {
           if (Math.abs(inferredStart - activeRound.actionStart) <= 60) {
@@ -359,9 +374,9 @@ export default function FloatingVideoPlayer() {
               activeRound.driftStrikes++;
               // Anchor frozen — do NOT update lastInferredStart or lastValidTime yet
               if (activeRound.driftStrikes >= 2) {
-                // Three-strikes: slow-mo or cut confirmed → end round
+                // Three-strikes: broadcast cut confirmed — last clean frame is the true end
                 if (!activeRound.partial) {
-                  localMarkers.push({ time: Math.min(activeRound.lastValidTime + 2, videoDuration), label: "Round End" });
+                  localMarkers.push({ time: activeRound.lastValidTime, label: "Round End" });
                 }
                 activeRound  = null;
                 pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
@@ -376,7 +391,7 @@ export default function FloatingVideoPlayer() {
           } else {
             // Big jump → close active round, start a new candidate
             if (!activeRound.partial) {
-              localMarkers.push({ time: Math.min(activeRound.lastValidTime + 2, videoDuration), label: "Round End" });
+              localMarkers.push({ time: activeRound.lastValidTime, label: "Round End" });
             }
             activeRound  = null;
             pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
@@ -401,8 +416,12 @@ export default function FloatingVideoPlayer() {
               // Promote once 40 s of drift-free signal confirms a real round
               if (pendingRound.lastValidTime - pendingRound.firstHitTime >= 40) {
                 if (!pendingRound.partial) {
-                  // Only emit Prep Phase if OCR caught the round early enough (replay took less than half of prep)
-                  if (pendingRound.firstHitTime < pendingRound.actionStart - 20) {
+                  // Emit Prep Phase only when a valid OCR hit landed in the 25–35 s window before action
+                  // (confirms the broadcast was showing the prep screen, not a replay)
+                  const hasEarlyHit = validHits.some(
+                    (t) => t >= pendingRound!.actionStart - 35 && t <= pendingRound!.actionStart - 25,
+                  );
+                  if (hasEarlyHit) {
                     localMarkers.push({ time: Math.max(0, pendingRound.actionStart - 30), label: "Prep Phase" });
                   }
                   localMarkers.push({ time: pendingRound.actionStart, label: "Action Phase" });
@@ -426,7 +445,9 @@ export default function FloatingVideoPlayer() {
         pendingRound = null;
         if (activeRound && t2 > activeRound.actionStart + 250) {
           if (!activeRound.partial) {
-            localMarkers.push({ time: Math.min(activeRound.lastValidTime + 2, videoDuration), label: "Round End" });
+            // UI disappeared: scan 1 s at a time to find the exact first null frame
+            const endTime = await scanRoundEnd(activeRound.lastValidTime, Math.min(t2, activeRound.lastValidTime + 12));
+            localMarkers.push({ time: endTime, label: "Round End" });
           }
           activeRound = null;
         }
@@ -441,7 +462,8 @@ export default function FloatingVideoPlayer() {
 
     // Trailing: seal the last confirmed active round (pendingRound never reached threshold → discard)
     if (!abortRef.current && activeRound && !activeRound.partial) {
-      localMarkers.push({ time: Math.min(activeRound.lastValidTime + 2, videoDuration), label: "Round End" });
+      const endTime = await scanRoundEnd(activeRound.lastValidTime, Math.min(videoDuration, activeRound.lastValidTime + 12));
+      localMarkers.push({ time: endTime, label: "Round End" });
     }
 
     // ── Post-processing: sort → clean → commit ────────────────────────────────
@@ -451,15 +473,33 @@ export default function FloatingVideoPlayer() {
     for (let i = 0; i < localMarkers.length; i++) {
       const cur  = localMarkers[i];
       const next = localMarkers[i + 1];
-      // Drop a Defuser Planted that is immediately superseded by Round End (< 15 s gap)
+
+      // Rule 1 — Drop Defuser Planted immediately superseded by Round End (< 15 s)
       if (cur.label === "Defuser Planted" && next?.label === "Round End" && next.time - cur.time < 15) {
         continue;
       }
-      // Dedup: drop if the same label was kept less than 20 s ago
+
       const last = cleanedMarkers[cleanedMarkers.length - 1];
-      if (last && last.label === cur.label && cur.time - last.time < 20) {
-        continue;
+      if (last) {
+        const gap = cur.time - last.time;
+        // Prep Phase → Action Phase is a canonical adjacent pair; never suppress it
+        const isPrepActionPair = last.label === "Prep Phase" && cur.label === "Action Phase";
+
+        if (!isPrepActionPair) {
+          // Rule 2 — Two markers within 8 s: keep Round End, drop the other
+          if (gap < 8) {
+            if (cur.label === "Round End" && last.label !== "Round End") {
+              cleanedMarkers.pop(); // evict the lower-priority predecessor
+            } else {
+              continue; // cur loses; discard it
+            }
+          // Rule 3 — Same label within 20 s: drop the duplicate
+          } else if (cur.label === last.label && gap < 20) {
+            continue;
+          }
+        }
       }
+
       cleanedMarkers.push(cur);
     }
 
