@@ -305,19 +305,38 @@ export default function FloatingVideoPlayer() {
     };
 
     // Detect the 'WON' victory banner in the centre-upper area of the screen.
-    // Seeks to t internally so callers must account for the seek side-effect.
+    // Seeks to t, recognises, then restores video.currentTime to avoid disturbing the main loop.
     const checkWonBanner = async (t: number): Promise<boolean> => {
+      const originalTime = v.currentTime;
       await seekTo(t);
+
       const vw = v.videoWidth;
       const vh = v.videoHeight;
-      const bw = Math.floor(vw * 0.15);
-      const bh = Math.floor(vh * 0.08);
+      const bw = Math.floor(vw * 0.20);
+      const bh = Math.floor(vh * 0.15);
       offscreen.width  = bw;
       offscreen.height = bh;
-      ctx.drawImage(v, Math.floor(vw * 0.50), Math.floor(vh * 0.08), bw, bh, 0, 0, bw, bh);
+      ctx.drawImage(v, Math.floor(vw * 0.40), Math.floor(vh * 0.15), bw, bh, 0, 0, bw, bh);
+
+      // Binarize: bright/white text pixels → black; everything else → white.
+      // "ROUND WON" uses white lettering — inverting produces dark-on-light for best Tesseract accuracy.
+      const imgData = ctx.getImageData(0, 0, bw, bh);
+      const d = imgData.data;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] > 200 && d[i + 1] > 200 && d[i + 2] > 200) {
+          d[i] = 0; d[i + 1] = 0; d[i + 2] = 0; d[i + 3] = 255;
+        } else {
+          d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; d[i + 3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+
       const { data: { text } } = await worker.recognize(offscreen);
-      const norm = text.toUpperCase().replace(/\s/g, "");
-      return norm.includes("WON") || norm.includes("W0N") || norm.includes("WQN");
+
+      // Restore position so the main loop's frame pointer is undisturbed
+      await seekTo(originalTime);
+
+      return /W[O0Q]N/.test(text.toUpperCase().replace(/[\s\n]/g, ""));
     };
 
     // 1-second precision scan for the round-end boundary.
@@ -327,8 +346,9 @@ export default function FloatingVideoPlayer() {
       const hi = Math.min(Math.floor(to), Math.floor(videoDuration));
       let firstNull: number | null = null;
       for (let s = lo; s <= hi; s++) {
-        // checkWonBanner seeks to s — ocrFrame afterwards reads the same frame
         if (await checkWonBanner(s)) return s;
+        // checkWonBanner restores video.currentTime — re-seek before reading the timer
+        await seekTo(s);
         const { remaining } = await ocrFrame();
         if (remaining === null && firstNull === null) firstNull = s;
       }
