@@ -92,6 +92,7 @@ export type Tool =
 export interface VideoMarker {
   time: number;   // seconds into the video
   label: string;
+  color?: string;
 }
 
 export interface Waypoint {

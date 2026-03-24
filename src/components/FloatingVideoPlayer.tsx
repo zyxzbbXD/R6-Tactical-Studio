@@ -236,7 +236,7 @@ export default function FloatingVideoPlayer() {
     clearVideoMarkers();
 
     // Local staging array — markers are collected here and committed atomically at the end
-    const localMarkers: { time: number; label: string }[] = [];
+    const localMarkers: { time: number; label: string; color?: string }[] = [];
     // All video timestamps where OCR returned a valid remaining time (used for Prep Phase gate)
     const validHits: number[] = [];
 
@@ -304,16 +304,35 @@ export default function FloatingVideoPlayer() {
       return result;
     };
 
-    // 1-second precision scan for "first null" within a small window — used for natural round ends
+    // Detect the 'WON' victory banner in the centre-upper area of the screen.
+    // Seeks to t internally so callers must account for the seek side-effect.
+    const checkWonBanner = async (t: number): Promise<boolean> => {
+      await seekTo(t);
+      const vw = v.videoWidth;
+      const vh = v.videoHeight;
+      const bw = Math.floor(vw * 0.15);
+      const bh = Math.floor(vh * 0.08);
+      offscreen.width  = bw;
+      offscreen.height = bh;
+      ctx.drawImage(v, Math.floor(vw * 0.50), Math.floor(vh * 0.08), bw, bh, 0, 0, bw, bh);
+      const { data: { text } } = await worker.recognize(offscreen);
+      const norm = text.toUpperCase().replace(/\s/g, "");
+      return norm.includes("WON") || norm.includes("W0N") || norm.includes("WQN");
+    };
+
+    // 1-second precision scan for the round-end boundary.
+    // WON banner takes highest priority; fallback to first timer-null frame.
     const scanRoundEnd = async (from: number, to: number): Promise<number> => {
       const lo = Math.ceil(from);
       const hi = Math.min(Math.floor(to), Math.floor(videoDuration));
+      let firstNull: number | null = null;
       for (let s = lo; s <= hi; s++) {
-        await seekTo(s);
+        // checkWonBanner seeks to s — ocrFrame afterwards reads the same frame
+        if (await checkWonBanner(s)) return s;
         const { remaining } = await ocrFrame();
-        if (remaining === null) return s;
+        if (remaining === null && firstNull === null) firstNull = s;
       }
-      return hi;
+      return firstNull ?? hi;
     };
 
     // Candidate round: buffered until 40 s of stable, drift-free signal confirms it's a real round
@@ -336,6 +355,31 @@ export default function FloatingVideoPlayer() {
     } | null = null;
     let pendingRound: CandidateRound | null = null;
 
+    // Per-round staging buffer — flushed to localMarkers only after lifecycle validation
+    let roundMarkerBuffer: typeof localMarkers = [];
+
+    // Lifecycle gate: a genuine round must have a valid OCR hit within 20 s of action start.
+    // If not, the entire buffer is silently discarded (long replay masquerading as a real round).
+    const commitRound = (actionStart: number) => {
+      const hasEarlyActivity = validHits.some(
+        (t) => t >= actionStart && t <= actionStart + 20,
+      );
+      if (hasEarlyActivity) localMarkers.push(...roundMarkerBuffer);
+      roundMarkerBuffer = [];
+    };
+
+    // Push Prep Phase (blue, only if a valid OCR hit landed in the [-30, -25] window before
+    // action start) + Action Phase into roundMarkerBuffer.
+    const pushRoundStartMarkers = (actionStart: number) => {
+      const hasPrepHit = validHits.some(
+        (t) => t >= actionStart - 30 && t <= actionStart - 25,
+      );
+      if (hasPrepHit) {
+        roundMarkerBuffer.push({ time: Math.max(0, actionStart - 30), label: "Prep Phase", color: "#3b82f6" });
+      }
+      roundMarkerBuffer.push({ time: actionStart, label: "Action Phase" });
+    };
+
     for (let t2 = 0; t2 < videoDuration && !abortRef.current;) {
       await seekTo(t2);
       const { remaining, isPlanted } = await ocrFrame();
@@ -347,16 +391,16 @@ export default function FloatingVideoPlayer() {
           activeRound.driftStrikes  = 0;
           if (!activeRound.hasPlanted) {
             activeRound.hasPlanted = true;
-            localMarkers.push({ time: t2, label: "Defuser Planted" });
+            roundMarkerBuffer.push({ time: t2, label: "Defuser Planted" });
           }
         } else if (pendingRound) {
           // Planted during candidate window: strongest possible confirmation → promote immediately
+          roundMarkerBuffer = [];
           if (!pendingRound.partial) {
-            localMarkers.push({ time: Math.max(0, pendingRound.actionStart - 30), label: "Prep Phase" });
-            localMarkers.push({ time: pendingRound.actionStart,                   label: "Action Phase" });
+            pushRoundStartMarkers(pendingRound.actionStart);
+            roundMarkerBuffer.push({ time: t2, label: "Defuser Planted" });
           }
           activeRound  = { actionStart: pendingRound.actionStart, lastValidTime: t2, lastInferredStart: pendingRound.lastInferredStart, driftStrikes: 0, partial: pendingRound.partial, hasPlanted: true };
-          localMarkers.push({ time: t2, label: "Defuser Planted" });
           pendingRound = null;
         }
         // If neither active nor pending: planted with no context — ignore
@@ -364,7 +408,7 @@ export default function FloatingVideoPlayer() {
       } else if (remaining !== null) {
         const inferredStart = t2 - (180 - remaining);
         const isPartial     = inferredStart < 0;
-        validHits.push(t2); // record every clean OCR hit for Prep Phase gate
+        validHits.push(t2); // record every clean OCR hit for lifecycle gate and Prep Phase gate
 
         if (activeRound) {
           if (Math.abs(inferredStart - activeRound.actionStart) <= 60) {
@@ -376,7 +420,10 @@ export default function FloatingVideoPlayer() {
               if (activeRound.driftStrikes >= 2) {
                 // Three-strikes: broadcast cut confirmed — last clean frame is the true end
                 if (!activeRound.partial) {
-                  localMarkers.push({ time: activeRound.lastValidTime, label: "Round End" });
+                  roundMarkerBuffer.push({ time: activeRound.lastValidTime, label: "Round End" });
+                  commitRound(activeRound.actionStart);
+                } else {
+                  roundMarkerBuffer = [];
                 }
                 activeRound  = null;
                 pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
@@ -391,7 +438,10 @@ export default function FloatingVideoPlayer() {
           } else {
             // Big jump → close active round, start a new candidate
             if (!activeRound.partial) {
-              localMarkers.push({ time: activeRound.lastValidTime, label: "Round End" });
+              roundMarkerBuffer.push({ time: activeRound.lastValidTime, label: "Round End" });
+              commitRound(activeRound.actionStart);
+            } else {
+              roundMarkerBuffer = [];
             }
             activeRound  = null;
             pendingRound = { actionStart: inferredStart, lastValidTime: t2, firstHitTime: t2, lastInferredStart: inferredStart, driftStrikes: 0, partial: isPartial };
@@ -415,16 +465,9 @@ export default function FloatingVideoPlayer() {
               pendingRound.lastInferredStart = inferredStart;
               // Promote once 40 s of drift-free signal confirms a real round
               if (pendingRound.lastValidTime - pendingRound.firstHitTime >= 40) {
+                roundMarkerBuffer = [];
                 if (!pendingRound.partial) {
-                  // Emit Prep Phase only when a valid OCR hit landed in the 25–35 s window before action
-                  // (confirms the broadcast was showing the prep screen, not a replay)
-                  const hasEarlyHit = validHits.some(
-                    (t) => t >= pendingRound!.actionStart - 35 && t <= pendingRound!.actionStart - 25,
-                  );
-                  if (hasEarlyHit) {
-                    localMarkers.push({ time: Math.max(0, pendingRound.actionStart - 30), label: "Prep Phase" });
-                  }
-                  localMarkers.push({ time: pendingRound.actionStart, label: "Action Phase" });
+                  pushRoundStartMarkers(pendingRound.actionStart);
                 }
                 activeRound  = { actionStart: pendingRound.actionStart, lastValidTime: pendingRound.lastValidTime, lastInferredStart: pendingRound.lastInferredStart, driftStrikes: 0, partial: pendingRound.partial, hasPlanted: false };
                 pendingRound = null;
@@ -447,7 +490,10 @@ export default function FloatingVideoPlayer() {
           if (!activeRound.partial) {
             // UI disappeared: scan 1 s at a time to find the exact first null frame
             const endTime = await scanRoundEnd(activeRound.lastValidTime, Math.min(t2, activeRound.lastValidTime + 12));
-            localMarkers.push({ time: endTime, label: "Round End" });
+            roundMarkerBuffer.push({ time: endTime, label: "Round End" });
+            commitRound(activeRound.actionStart);
+          } else {
+            roundMarkerBuffer = [];
           }
           activeRound = null;
         }
@@ -456,6 +502,16 @@ export default function FloatingVideoPlayer() {
       // Adaptive step: 2 s near round-end or while planted, 10 s otherwise
       const expectedRemaining = activeRound ? 180 - (t2 - activeRound.actionStart) : Infinity;
       const nextStep = (isPlanted || expectedRemaining <= 15) ? 2 : 10;
+
+      // Scene A — WON banner check: only during 2 s endgame sweep, never during 10 s cruise
+      if (nextStep === 2 && activeRound && !activeRound.partial) {
+        if (await checkWonBanner(t2)) {
+          roundMarkerBuffer.push({ time: t2, label: "Round End" });
+          commitRound(activeRound.actionStart);
+          activeRound = null;
+        }
+      }
+
       t2 += nextStep;
       setAnalyzeProgress(Math.round(Math.min((t2 / videoDuration) * 100, 99)));
     }
@@ -463,7 +519,8 @@ export default function FloatingVideoPlayer() {
     // Trailing: seal the last confirmed active round (pendingRound never reached threshold → discard)
     if (!abortRef.current && activeRound && !activeRound.partial) {
       const endTime = await scanRoundEnd(activeRound.lastValidTime, Math.min(videoDuration, activeRound.lastValidTime + 12));
-      localMarkers.push({ time: endTime, label: "Round End" });
+      roundMarkerBuffer.push({ time: endTime, label: "Round End" });
+      commitRound(activeRound.actionStart);
     }
 
     // ── Post-processing: sort → clean → commit ────────────────────────────────
@@ -796,12 +853,11 @@ export default function FloatingVideoPlayer() {
                 {/* Phase marker ticks */}
                 {videoMarkers.map((marker, i) => {
                   const pct    = duration > 0 ? (marker.time / duration) * 100 : 0;
-                  const color  = marker.label === "Round End"   ? "#ef4444"
-                               : marker.label === "Prep Phase"  ? "#06b6d4"
-                               :                                  "#facc15";
-                  const shadow = marker.label === "Round End"   ? "0 0 4px rgba(239,68,68,0.7)"
-                               : marker.label === "Prep Phase"  ? "0 0 4px rgba(6,182,212,0.7)"
-                               :                                  "0 0 4px rgba(250,204,21,0.7)";
+                  const derivedColor = marker.label === "Round End"  ? "#ef4444"
+                                   : marker.label === "Prep Phase" ? "#06b6d4"
+                                   :                                 "#facc15";
+                  const color  = marker.color ?? derivedColor;
+                  const shadow = `0 0 4px ${color}b3`;
                   return (
                     <button
                       key={i}
