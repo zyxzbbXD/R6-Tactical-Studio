@@ -34,6 +34,8 @@ interface UIState {
   draggingOperator: OperatorDragPayload | null;
   /** Canvas selection — promoted from local component state for cross-component access. */
   selectedId: string | null;
+  /** True while the room-label inline textarea is open. Used by App.tsx to block menu-undo. */
+  isEditingRoomLabel: boolean;
 
   setTool: (tool: Tool) => void;
   setBrushStyle: (color: string, size: number) => void;
@@ -43,6 +45,7 @@ interface UIState {
   setDraggingOperator: (op: OperatorDragPayload) => void;
   clearDraggingOperator: () => void;
   setSelectedId: (id: string | null) => void;
+  setEditingRoomLabel: (v: boolean) => void;
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -57,6 +60,7 @@ export const useUIStore = create<UIState>()((set) => ({
   pendingOperator: null,
   draggingOperator: null,
   selectedId: null,
+  isEditingRoomLabel: false,
 
   setTool:               (tool)        => set({ tool }),
   setBrushStyle:         (color, size) => set({ brushColor: color, brushSize: size }),
@@ -66,4 +70,5 @@ export const useUIStore = create<UIState>()((set) => ({
   setDraggingOperator:   (op)          => set({ draggingOperator: op }),
   clearDraggingOperator: ()            => set({ draggingOperator: null }),
   setSelectedId:         (id)          => set({ selectedId: id }),
+  setEditingRoomLabel:   (v)           => set({ isEditingRoomLabel: v }),
 }));

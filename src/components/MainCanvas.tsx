@@ -753,6 +753,14 @@ export default function MainCanvas({
   const copiedItemRef = useRef<BoardItem | null>(null);
   const [editingTextId,  setEditingTextId]  = useState<string | null>(null);
   const [activeRoomEdit, setActiveRoomEdit] = useState<{ id: string; x: number; y: number; text: string; screenX: number; screenY: number } | null>(null);
+  // Ref tracks activeRoomEdit for use in the document-level keydown handler (stale-closure-safe)
+  const activeRoomEditRef = useRef(activeRoomEdit);
+  activeRoomEditRef.current = activeRoomEdit;
+  // Keep UIStore flag in sync so App.tsx menu-undo can also block undo during room label edit
+  const setEditingRoomLabel = useUIStore((s) => s.setEditingRoomLabel);
+  useEffect(() => {
+    setEditingRoomLabel(activeRoomEdit !== null);
+  }, [activeRoomEdit, setEditingRoomLabel]);
   const [ctxMenu, setCtxMenu] = useState<{ itemId: string; x: number; y: number } | null>(null);
 
   // Wrapper: clear resize/transform mode when switching operators
@@ -1022,7 +1030,13 @@ export default function MainCanvas({
           setSelectedId(pasted.id);
         }
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === "z") { e.preventDefault(); undo(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+        e.preventDefault();
+        // If the room-label editor is open, close it instead of undoing board state.
+        // Calling undo() while the textarea overlay is mounted can cause a render crash.
+        if (activeRoomEditRef.current) { setActiveRoomEdit(null); return; }
+        undo();
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
         if (!currentProjectId) return;
@@ -1309,6 +1323,7 @@ export default function MainCanvas({
     tool === "eraser"         ? "cell"      :
     tool === "text"           ? "text"      :
     tool === "place_operator" ? "copy"      :
+    tool === "room_name"      ? "crosshair" :
     "default";
 
   const statusHints: Record<Tool, string> = {
@@ -1716,7 +1731,7 @@ export default function MainCanvas({
 
 
         {/* Undo (Ctrl/Cmd+Z) */}
-        <ToolBtn icon={Undo2} label="Undo (Ctrl+Z)" onClick={undo} />
+        <ToolBtn icon={Undo2} label="Undo (Ctrl+Z)" onClick={() => { if (activeRoomEditRef.current) { setActiveRoomEdit(null); return; } undo(); }} />
 
         <div className="flex-1 shrink-0" />
 
@@ -2127,6 +2142,11 @@ export default function MainCanvas({
               setActiveRoomEdit(null);
             }}
             onKeyDown={(e) => {
+              // Block ALL keys from reaching document-level shortcut handlers.
+              // stopPropagation stops React synthetic bubbling; stopImmediatePropagation
+              // stops the native event from reaching document.addEventListener listeners.
+              e.stopPropagation();
+              e.nativeEvent.stopImmediatePropagation();
               if (e.key === "Escape" || e.key === "Enter") {
                 updateRoomLabel(activeRoomEdit.id, { text: e.currentTarget.value });
                 setActiveRoomEdit(null);

@@ -5,6 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useBoardStore } from "../store/useBoardStore";
 import type { Waypoint } from "../store/useBoardStore";
 import { useUIStore } from "../store/useUIStore";
+import { useCanvasStore } from "../store/canvasStore";
 
 // ─── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -160,31 +161,32 @@ export function useCanvasDraw({
     }
 
     if (tool === "room_name") {
-      if (e.target === stage) {
-        const pos = toMapCoords(stage);
-        const newId = crypto.randomUUID();
+      const pos   = toMapCoords(stage);
+      const newId = crypto.randomUUID();
 
-        // 1. 写入 Zustand (加上 currentFloorId 确保楼层隔离)
-        addRoomLabel({
-          id: newId,
-          x: pos.x, y: pos.y,
-          text: "Room",
-          fontSize: 60,
-          fill: "#ffffff",
-          rotation: 0, scaleX: 1, scaleY: 1,
-        }); // floorId injected by store from useCanvasStore.getState().currentFloorId
+      // 1. 写入 Zustand (floorId injected by store from useCanvasStore.getState().currentFloorId)
+      addRoomLabel({
+        id: newId,
+        x: pos.x, y: pos.y,
+        text: "Room",
+        fontSize: 60,
+        fill: "#ffffff",
+        rotation: 0, scaleX: 1, scaleY: 1,
+      });
 
-        // 2. 获取原生屏幕坐标，绕开 Konva 的矩阵缩放
-        const rect = containerRef.current?.getBoundingClientRect();
-        const sx = rect ? e.evt.clientX - rect.left : e.evt.clientX;
-        const sy = rect ? e.evt.clientY - rect.top  : e.evt.clientY;
-
-        console.log("🔥 Room Name Created! Spawning textarea at:", sx, sy);
-
-        // 3. 激活 HTML 文本框并重置鼠标工具
-        setActiveRoomEdit({ id: newId, x: pos.x, y: pos.y, text: "Room", screenX: sx, screenY: sy });
-        setTool("cursor");
+      // 2. Auto-enable the "names" overlay so the newly created label is immediately visible
+      if (!useCanvasStore.getState().overlays.names) {
+        useCanvasStore.getState().toggleOverlay("names");
       }
+
+      // 3. 获取原生屏幕坐标，绕开 Konva 的矩阵缩放
+      const rect = containerRef.current?.getBoundingClientRect();
+      const sx = rect ? e.evt.clientX - rect.left : e.evt.clientX;
+      const sy = rect ? e.evt.clientY - rect.top  : e.evt.clientY;
+
+      // 4. 激活 HTML 文本框并重置鼠标工具
+      setActiveRoomEdit({ id: newId, x: pos.x, y: pos.y, text: "Room", screenX: sx, screenY: sy });
+      setTool("cursor");
       return;
     }
 

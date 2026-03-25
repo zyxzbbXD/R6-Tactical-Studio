@@ -673,11 +673,13 @@ export const useBoardStore = create<BoardState>()(
     }),
     {
       partialize: (state) => ({
-        items:          state.items,
-        lines:          state.lines,
-        throwableLines: state.throwableLines,
-        texts:          state.texts,
-        routeTimeMap:   state.routeTimeMap,
+        items:             state.items,
+        lines:             state.lines,
+        throwableLines:    state.throwableLines,
+        texts:             state.texts,
+        routeTimeMap:      state.routeTimeMap,
+        currentRouteStep:  state.currentRouteStep,
+        currentPhase:      state.currentPhase,
       }),
       limit: 50,
     },
@@ -690,6 +692,8 @@ type TemporalBoardState = {
   throwableLines: ThrowableLine[];
   texts: TextNode[];
   routeTimeMap: Record<string, Record<number, number>>;
+  currentRouteStep: 1 | 2 | 3 | 4 | 5;
+  currentPhase: number;
 };
 
 /** React hook for the zundo temporal store (undo / redo / history). */

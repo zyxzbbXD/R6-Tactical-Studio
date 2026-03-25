@@ -304,22 +304,28 @@ export default function FloatingVideoPlayer() {
       return result;
     };
 
-    // Detect the 'WON' victory banner in the centre-upper area of the screen.
-    // Seeks to t, recognises, then restores video.currentTime to avoid disturbing the main loop.
-    const checkWonBanner = async (t: number): Promise<boolean> => {
+    // Detect the 'WON' victory banner — Hunt Mode capture (screen centre-mid).
+    // Uses {once: true} seeked listeners for reliable async frame capture.
+    // Capture rect: x=35%, y=40%, w=30%, h=15% — covers the full WON settlement banner.
+    // Always restores video.currentTime after recognition so callers are not disturbed.
+    const checkWonBanner = async (seekT: number): Promise<boolean> => {
       const originalTime = v.currentTime;
-      await seekTo(t);
+
+      await new Promise<void>((resolve) => {
+        v.addEventListener("seeked", () => resolve(), { once: true });
+        v.currentTime = seekT;
+      });
 
       const vw = v.videoWidth;
       const vh = v.videoHeight;
-      const bw = Math.floor(vw * 0.20);
+      const bw = Math.floor(vw * 0.30);
       const bh = Math.floor(vh * 0.15);
       offscreen.width  = bw;
       offscreen.height = bh;
-      ctx.drawImage(v, Math.floor(vw * 0.40), Math.floor(vh * 0.15), bw, bh, 0, 0, bw, bh);
+      ctx.drawImage(v, Math.floor(vw * 0.35), Math.floor(vh * 0.40), bw, bh, 0, 0, bw, bh);
 
-      // Binarize: bright/white text pixels → black; everything else → white.
-      // "ROUND WON" uses white lettering — inverting produces dark-on-light for best Tesseract accuracy.
+      // Fast binarize: bright white text → pure black; all other background → pure white.
+      // "ROUND WON" renders in white lettering; inversion gives dark-on-light for best Tesseract accuracy.
       const imgData = ctx.getImageData(0, 0, bw, bh);
       const d = imgData.data;
       for (let i = 0; i < d.length; i += 4) {
@@ -334,24 +340,35 @@ export default function FloatingVideoPlayer() {
       const { data: { text } } = await worker.recognize(offscreen);
 
       // Restore position so the main loop's frame pointer is undisturbed
-      await seekTo(originalTime);
+      await new Promise<void>((resolve) => {
+        v.addEventListener("seeked", () => resolve(), { once: true });
+        v.currentTime = originalTime;
+      });
 
       return /W[O0Q]N/.test(text.toUpperCase().replace(/[\s\n]/g, ""));
     };
 
-    // 1-second precision scan for the round-end boundary.
-    // WON banner takes highest priority; fallback to first timer-null frame.
-    const scanRoundEnd = async (from: number, to: number): Promise<number> => {
-      const lo = Math.ceil(from);
-      const hi = Math.min(Math.floor(to), Math.floor(videoDuration));
+    // Hunt Mode: scan [fromT, toT] at 0.25 s granularity searching for the WON settlement banner.
+    // Returns the precise timestamp the banner first appears.
+    // Fallback: if no WON banner is found in the full window, returns the first frame where
+    // the top-area timer OCR returns null (UI has already disappeared).
+    const huntPrecisionWonEnd = async (fromT: number, toT: number): Promise<number> => {
+      const hi = Math.min(toT, videoDuration);
       let firstNull: number | null = null;
-      for (let s = lo; s <= hi; s++) {
-        if (await checkWonBanner(s)) return s;
-        // checkWonBanner restores video.currentTime — re-seek before reading the timer
-        await seekTo(s);
-        const { remaining } = await ocrFrame();
-        if (remaining === null && firstNull === null) firstNull = s;
+
+      for (let s = fromT; s <= hi + 0.001 && !abortRef.current; s += 0.25) {
+        const t = Math.min(s, hi);
+        if (await checkWonBanner(t)) return t;
+
+        // Track the first timer-null frame as a fallback anchor.
+        // checkWonBanner restored currentTime to originalTime; re-seek to t for ocrFrame.
+        if (firstNull === null) {
+          await seekTo(t);
+          const { remaining } = await ocrFrame();
+          if (remaining === null) firstNull = t;
+        }
       }
+
       return firstNull ?? hi;
     };
 
@@ -438,9 +455,10 @@ export default function FloatingVideoPlayer() {
               activeRound.driftStrikes++;
               // Anchor frozen — do NOT update lastInferredStart or lastValidTime yet
               if (activeRound.driftStrikes >= 2) {
-                // Three-strikes: broadcast cut confirmed — last clean frame is the true end
+                // Three-strikes: broadcast cut confirmed — hunt for precise WON banner end
                 if (!activeRound.partial) {
-                  roundMarkerBuffer.push({ time: activeRound.lastValidTime, label: "Round End" });
+                  const endTime = await huntPrecisionWonEnd(activeRound.lastValidTime, Math.min(t2, activeRound.lastValidTime + 12));
+                  roundMarkerBuffer.push({ time: endTime, label: "Round End" });
                   commitRound(activeRound.actionStart);
                 } else {
                   roundMarkerBuffer = [];
@@ -456,9 +474,10 @@ export default function FloatingVideoPlayer() {
               activeRound.lastInferredStart = inferredStart;
             }
           } else {
-            // Big jump → close active round, start a new candidate
+            // Big jump → close active round, hunt for precise WON banner end
             if (!activeRound.partial) {
-              roundMarkerBuffer.push({ time: activeRound.lastValidTime, label: "Round End" });
+              const endTime = await huntPrecisionWonEnd(activeRound.lastValidTime, Math.min(t2, activeRound.lastValidTime + 12));
+              roundMarkerBuffer.push({ time: endTime, label: "Round End" });
               commitRound(activeRound.actionStart);
             } else {
               roundMarkerBuffer = [];
@@ -508,8 +527,8 @@ export default function FloatingVideoPlayer() {
         pendingRound = null;
         if (activeRound && t2 > activeRound.actionStart + 250) {
           if (!activeRound.partial) {
-            // UI disappeared: scan 1 s at a time to find the exact first null frame
-            const endTime = await scanRoundEnd(activeRound.lastValidTime, Math.min(t2, activeRound.lastValidTime + 12));
+            // UI disappeared — Hunt Mode: 0.25 s precision scan for WON banner
+            const endTime = await huntPrecisionWonEnd(activeRound.lastValidTime, Math.min(t2, activeRound.lastValidTime + 12));
             roundMarkerBuffer.push({ time: endTime, label: "Round End" });
             commitRound(activeRound.actionStart);
           } else {
@@ -519,18 +538,9 @@ export default function FloatingVideoPlayer() {
         }
       }
 
-      // Adaptive step: 2 s near round-end or while planted, 10 s otherwise
+      // Adaptive step: 2 s near round-end or while planted, 10 s otherwise (Cruise Mode — no WON check here)
       const expectedRemaining = activeRound ? 180 - (t2 - activeRound.actionStart) : Infinity;
       const nextStep = (isPlanted || expectedRemaining <= 15) ? 2 : 10;
-
-      // Scene A — WON banner check: only during 2 s endgame sweep, never during 10 s cruise
-      if (nextStep === 2 && activeRound && !activeRound.partial) {
-        if (await checkWonBanner(t2)) {
-          roundMarkerBuffer.push({ time: t2, label: "Round End" });
-          commitRound(activeRound.actionStart);
-          activeRound = null;
-        }
-      }
 
       t2 += nextStep;
       setAnalyzeProgress(Math.round(Math.min((t2 / videoDuration) * 100, 99)));
@@ -538,7 +548,7 @@ export default function FloatingVideoPlayer() {
 
     // Trailing: seal the last confirmed active round (pendingRound never reached threshold → discard)
     if (!abortRef.current && activeRound && !activeRound.partial) {
-      const endTime = await scanRoundEnd(activeRound.lastValidTime, Math.min(videoDuration, activeRound.lastValidTime + 12));
+      const endTime = await huntPrecisionWonEnd(activeRound.lastValidTime, Math.min(videoDuration, activeRound.lastValidTime + 12));
       roundMarkerBuffer.push({ time: endTime, label: "Round End" });
       commitRound(activeRound.actionStart);
     }

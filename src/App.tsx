@@ -5,6 +5,7 @@ import MainCanvas from "./components/MainCanvas";
 import RightSidebar from "./components/RightSidebar";
 import SettingsModal from "./components/SettingsModal";
 import ImportMapModal from "./components/ImportMapModal";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useSettingsStore } from "./store/useSettingsStore";
 import { useResizable } from "./hooks/useResizable";
 import { useBoardStore } from "./store/useBoardStore";
@@ -204,11 +205,21 @@ function App() {
       }));
 
       // menu-undo / menu-redo — zundo temporal store
+      // Guard: skip when a text input is focused OR the room-label editor is open.
+      const isEditingText = () => {
+        const el = document.activeElement;
+        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return true;
+        if (useUIStore.getState().isEditingRoomLabel) return true;
+        return false;
+      };
+
       unlisten.push(await listen("menu-undo", () => {
+        if (isEditingText()) return;
         useBoardStore.temporal.getState().undo();
       }));
 
       unlisten.push(await listen("menu-redo", () => {
+        if (isEditingText()) return;
         useBoardStore.temporal.getState().redo();
       }));
     })();
@@ -240,56 +251,58 @@ function App() {
   const rightTransition = anyResizing ? "none" : "width 200ms ease, opacity 200ms ease";
 
   return (
-    <div
-      className="flex h-full w-full overflow-hidden bg-r6-bg"
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={handleGlobalDrop}
-    >
-      {/* Left Sidebar */}
-      <Sidebar
-        width={leftPanelWidth}
-        transition={leftTransition}
-      />
-
-      {/* Left resize handle — only when open */}
-      {isLeftOpen && (
-        <div
-          className="flex-shrink-0 cursor-col-resize z-50 bg-transparent hover:bg-r6-accent transition-colors"
-          style={{ width: 4 }}
-          onMouseDown={startLeftResize}
+    <ErrorBoundary>
+      <div
+        className="flex h-full w-full overflow-hidden bg-r6-bg"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={handleGlobalDrop}
+      >
+        {/* Left Sidebar */}
+        <Sidebar
+          width={leftPanelWidth}
+          transition={leftTransition}
         />
-      )}
 
-      {/* Center — canvas fills remaining space.
-          pointer-events-none during resize stops the browser from computing
-          :hover states on the hundreds of Konva / DOM nodes inside. */}
-      <div className={cn("flex-1 min-w-0 min-h-0 flex flex-col", anyResizing && "pointer-events-none")}>
-        <MainCanvas
-          isLeftOpen={isLeftOpen}
-          leftPanelWidth={leftPanelWidth + (isLeftOpen ? 4 : 0)}
-          onToggleLeft={() => setIsLeftOpen((v) => !v)}
-          onResetWorkspace={resetWorkspace}
+        {/* Left resize handle — only when open */}
+        {isLeftOpen && (
+          <div
+            className="flex-shrink-0 cursor-col-resize z-50 bg-transparent hover:bg-r6-accent transition-colors"
+            style={{ width: 4 }}
+            onMouseDown={startLeftResize}
+          />
+        )}
+
+        {/* Center — canvas fills remaining space.
+            pointer-events-none during resize stops the browser from computing
+            :hover states on the hundreds of Konva / DOM nodes inside. */}
+        <div className={cn("flex-1 min-w-0 min-h-0 flex flex-col", anyResizing && "pointer-events-none")}>
+          <MainCanvas
+            isLeftOpen={isLeftOpen}
+            leftPanelWidth={leftPanelWidth + (isLeftOpen ? 4 : 0)}
+            onToggleLeft={() => setIsLeftOpen((v) => !v)}
+            onResetWorkspace={resetWorkspace}
+          />
+        </div>
+
+        {/* Right resize handle */}
+        {isRightSidebarOpen && (
+          <div
+            className="flex-shrink-0 cursor-col-resize z-50 bg-transparent hover:bg-r6-accent transition-colors"
+            style={{ width: 4 }}
+            onMouseDown={startRightResize}
+          />
+        )}
+
+        {/* Right Sidebar */}
+        <RightSidebar
+          width={rightWidth}
+          transition={rightTransition}
         />
+
+        <SettingsModal />
+        <ImportMapModal />
       </div>
-
-      {/* Right resize handle */}
-      {isRightSidebarOpen && (
-        <div
-          className="flex-shrink-0 cursor-col-resize z-50 bg-transparent hover:bg-r6-accent transition-colors"
-          style={{ width: 4 }}
-          onMouseDown={startRightResize}
-        />
-      )}
-
-      {/* Right Sidebar */}
-      <RightSidebar
-        width={rightWidth}
-        transition={rightTransition}
-      />
-
-      <SettingsModal />
-      <ImportMapModal />
-    </div>
+    </ErrorBoundary>
   );
 }
 
