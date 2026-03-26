@@ -18,11 +18,12 @@ import useImage from "use-image";
 import {
   Pencil, ArrowRight, Eraser, Undo2, Trash2,
   ZoomIn, ZoomOut, Maximize2,
-  Video, MapPin, ChevronDown, ChevronLeft, ChevronRight, MousePointer2, Loader2, Bot, FileDown, Save, Upload,
+  Video, MapPin, ChevronDown, ChevronLeft, ChevronRight, MousePointer2, Loader2, Bot, FileDown, Upload,
   FileImage, FileText, Film, FileJson,
   Image as ImageIcon, Layers2, Type, Box, ArrowUpDown,
   PanelLeftClose, PanelLeftOpen, LayoutTemplate,
   Spline, Route, MessageSquare, Tag, TableProperties,
+
 } from "lucide-react";
 // Hardcoded blueprint scale factors per map id.
 // Each value scales the blueprint image so it visually fills the 6400×3600 canvas.
@@ -36,7 +37,7 @@ const BLUEPRINT_MANUAL_SCALES: Record<string, number> = {
   fortress:         3.0,
   kafe:             3.0,
   lair:             3.0,
-  nighthavenlabs:   2.5,
+  nighthavenlabs:   2.0,
 };
 import FloatingVideoPlayer from "./FloatingVideoPlayer";
 import FloatingExportWindow from "./FloatingExportWindow";
@@ -47,7 +48,7 @@ import { useCanvasStore, type ViewMode, type OverlayKey } from "../store/canvasS
 import {
   useBoardStore,
   useTemporalBoardStore,
-  type BoardItem, type Tool,
+  type BoardItem, type Tool, type RoomLabelDef,
 } from "../store/useBoardStore";
 import { useUIStore } from "../store/useUIStore";
 import { useSettingsStore } from "../store/useSettingsStore";
@@ -678,9 +679,22 @@ export default function MainCanvas({
 
   // ── Project store (save) ───────────────────────────────────────────────────
   const saveCurrentProject = useProjectStore((s) => s.saveCurrentProject);
+  const saveAsNewProject   = useProjectStore((s) => s.saveAsNewProject);
   const currentProjectId   = useProjectStore((s) => s.currentProjectId);
-  const [isSaving,      setIsSaving]      = useState(false);
-  const [isExportOpen,  setIsExportOpen]  = useState(false);
+  const [isExportOpen,     setIsExportOpen]  = useState(false);
+  // ── Save-as-new modal ─────────────────────────────────────────────────────
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [saveModalName, setSaveModalName] = useState("");
+  const saveModalInputRef = useRef<HTMLInputElement>(null);
+  // ── Toast notification ────────────────────────────────────────────────────
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 2500);
+  }, []);
+  useEffect(() => () => clearTimeout(toastTimerRef.current), []);
   const exportMenuRef        = useRef<HTMLDivElement>(null);
   const jsonImportRef        = useRef<HTMLInputElement>(null);
   const roomLabelsImportRef  = useRef<HTMLInputElement>(null);
@@ -707,6 +721,7 @@ export default function MainCanvas({
     currentRouteStep, setCurrentRouteStep, showFullRoute,
     exportVisibility, setExportWindowOpen,
     items, lines, throwableLines, texts, roomLabels,
+    presetRoomLabels, showRoomNames, toggleRoomNames, setPresetRoomLabels,
     isVideoOpen, toggleVideo,
     notes,
     addItem, updateItem, removeItem,
@@ -729,6 +744,8 @@ export default function MainCanvas({
     exportVisibility: s.exportVisibility,
     setExportWindowOpen: s.setExportWindowOpen,
     items: s.items, lines: s.lines, throwableLines: s.throwableLines, texts: s.texts, roomLabels: s.roomLabels,
+    presetRoomLabels: s.presetRoomLabels, showRoomNames: s.showRoomNames,
+    toggleRoomNames: s.toggleRoomNames, setPresetRoomLabels: s.setPresetRoomLabels,
     isVideoOpen: s.isVideoOpen, toggleVideo: s.toggleVideo,
     notes: s.notes,
     addItem: s.addItem, updateItem: s.updateItem, removeItem: s.removeItem,
@@ -786,6 +803,7 @@ export default function MainCanvas({
   const zoomUiTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [zoomPercent, setZoomPercent]     = useState(100);
   const [containerSize, setContainerSize] = useState<Size>({ width: 0, height: 0 });
+
 
   // ── Blueprint transform — lifted from MapImageLayer so items co-transform ──
   // buildingCenter: updated from whichever image is currently loaded.
@@ -922,6 +940,38 @@ export default function MainCanvas({
     setZoomPercent(Math.round(scale * 100));
   }, [baseImgEl, containerSize, currentView]);
 
+  // ── Camera Reset Effect ────────────────────────────────────────────────────
+  // Single authoritative viewport reset. Fires when:
+  //   • The active project is closed (currentProjectId → null)
+  //   • The user switches to a different map (currentMapId changes)
+  // Does NOT fire on initial mount, nor during normal editing or project saves.
+  const cameraResetMountedRef    = useRef(false);
+  const prevMapIdForCameraRef    = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!cameraResetMountedRef.current) {
+      cameraResetMountedRef.current   = true;
+      prevMapIdForCameraRef.current   = currentMapId;
+      return;
+    }
+    const mapChanged = currentMapId !== prevMapIdForCameraRef.current;
+    prevMapIdForCameraRef.current = currentMapId;
+
+    if (currentProjectId === null || mapChanged) {
+      scaleRef.current    = 1;
+      positionRef.current = { x: 0, y: 0 };
+      if (stageRef.current) {
+        stageRef.current.scale({ x: 1, y: 1 });
+        stageRef.current.position({ x: 0, y: 0 });
+        stageRef.current.batchDraw();
+      }
+      setZoomPercent(100);
+      // fitToScreen re-centers on the loaded image; no-op if no image yet
+      // (auto-fit effect will handle it once the new image finishes loading).
+      fitToScreen();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProjectId, currentMapId]);
+
   // Auto-fit whenever the image finishes loading, the container resizes,
   // or the map/floor/view changes — but NOT in blueprint mode (Stage must stay untouched there).
   useEffect(() => {
@@ -1009,7 +1059,7 @@ export default function MainCanvas({
       if (e.key === "p" || e.key === "P") setTool("pen");
       if (e.key === "a" || e.key === "A") setTool("arrow");
       if (e.key === "e" || e.key === "E") setTool("eraser");
-      if (e.key === "t" || e.key === "T") setTool("throwable");
+      if (e.key === "t" || e.key === "T") { toggleRoomNames(); return; }
       if (e.key === "r" || e.key === "R") setTool("route");
       if (e.key === "x" || e.key === "X") setTool("text");
       if (e.key === " ") { e.preventDefault(); setIsPlaying(!isPlaying); }
@@ -1039,9 +1089,15 @@ export default function MainCanvas({
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
-        if (!currentProjectId) return;
-        setIsSaving(true);
-        saveCurrentProject().finally(() => setIsSaving(false));
+        if (currentProjectId) {
+          saveCurrentProject().then(() => {
+            showToast("项目已覆盖保存");
+          });
+        } else {
+          setSaveModalName("");
+          setSaveModalOpen(true);
+          setTimeout(() => saveModalInputRef.current?.focus(), 0);
+        }
       }
       // Arrow-key canvas pan — 40px per keypress, no React state involved
       const PAN_STEP = 40;
@@ -1059,7 +1115,7 @@ export default function MainCanvas({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [setTool, tool, setCurrentRouteStep, undo, currentProjectId, saveCurrentProject, isPlaying, setIsPlaying, selectedId, items, addItem]);
+  }, [setTool, tool, setCurrentRouteStep, undo, currentProjectId, saveCurrentProject, isPlaying, setIsPlaying, selectedId, items, addItem, toggleRoomNames]);
 
   // ── Wheel zoom ─────────────────────────────────────────────────────────────
   // Wheel zoom: bypass React state entirely — write directly to Konva stage.
@@ -1264,6 +1320,22 @@ export default function MainCanvas({
       });
   }, [currentMapId, currentFloorId]);
 
+  // ── Preset room names: load from /names/[mapId]-[floorId]-name.json ─────────
+  // Clears the cache when map/floor changes; silently no-ops when file is absent.
+  useEffect(() => {
+    if (!currentMapId || !currentFloorId) { setPresetRoomLabels([]); return; }
+    fetch(`/names/${currentMapId}-${currentFloorId}-name.json`)
+      .then((res) => { if (res.ok) return res.json(); throw new Error("not found"); })
+      .then((data: RoomLabelDef[]) => setPresetRoomLabels(data))
+      .catch(() => setPresetRoomLabels([]));
+  }, [currentMapId, currentFloorId, setPresetRoomLabels]);
+
+  /** Resolve localized text from a preset label. Falls back to English, then the raw value. */
+  const getPresetText = (text: RoomLabelDef["text"], lang: string): string => {
+    if (typeof text === "string") return text;
+    return text[lang] ?? text["en"] ?? "";
+  };
+
   const handleExportRoomLabels = () => {
     const { roomLabels } = useBoardStore.getState();
     const labelsForFloor = roomLabels.filter((rl) => rl.floorId === currentFloorId);
@@ -1331,7 +1403,7 @@ export default function MainCanvas({
     pen:            t("hint.pen",       language),
     arrow:          t("hint.arrow",     language),
     eraser:         t("hint.eraser",    language),
-    throwable:      "Throwable · drag to draw trajectory  (T)",
+    throwable:      "Throwable · drag to draw trajectory",
     route:          "Route · click operator to select, then click canvas to add waypoints (max 5) · Eraser clears route  (R)",
     text:           t("hint.text",      language),
     place_operator: `${t("hint.placing", language)} ${pendingOperator?.name ?? "operator"} · click on map to place · Esc to cancel`,
@@ -1343,7 +1415,7 @@ export default function MainCanvas({
     { id: "pen",       icon: Pencil,         label: "Pen        (P)" },
     { id: "arrow",     icon: ArrowRight,     label: "Arrow      (A)" },
     { id: "eraser",    icon: Eraser,         label: "Eraser     (E)" },
-    { id: "throwable", icon: Spline,         label: "Throwable  (T)", dividerBefore: true },
+    { id: "throwable", icon: Spline,         label: "Throwable", dividerBefore: true },
     { id: "route",     icon: Route,          label: "Route      (R)" },
     { id: "text",      icon: MessageSquare,  label: "Text       (X)" },
     ...(isAdvancedMode ? [{ id: "room_name" as Tool, icon: Tag, label: "Room Label", dividerBefore: true }] : []),
@@ -1582,8 +1654,8 @@ export default function MainCanvas({
             />
           ))}
 
-        {/* 房间名称渲染 — only when "Room Names" overlay is active */}
-        {overlays.names && roomLabels
+        {/* 房间名称渲染 — toggled by T key / Room Names button; always visible in advanced mode */}
+        {(showRoomNames || isAdvancedMode) && roomLabels
           .filter((rl) => rl.floorId === currentFloorId)
           .map((label) => (
             <KonvaText
@@ -1591,10 +1663,10 @@ export default function MainCanvas({
               x={label.x}
               y={label.y}
               text={activeRoomEdit?.id === label.id ? "" : label.text}
-              fontSize={label.fontSize / bpScale}
+              fontSize={label.fontSize}
               fill={label.fill}
               stroke="rgba(0,0,0,0.85)"
-              strokeWidth={4}
+              strokeWidth={4 / bpScale}
               fillAfterStrokeEnabled={true}
               fontStyle="bold"
               rotation={label.rotation}
@@ -1604,7 +1676,8 @@ export default function MainCanvas({
               listening={tool === "cursor" || tool === "eraser"}
               onClick={(e) => {
                 e.cancelBubble = true;
-                if (tool === "eraser") removeRoomLabel(label.id);
+                if (tool === "eraser") { removeRoomLabel(label.id); return; }
+                if (tool === "cursor") setSelectedId(label.id);
               }}
               onDblClick={(e) => {
                 e.cancelBubble = true;
@@ -1631,6 +1704,44 @@ export default function MainCanvas({
       texts, editingTextId, updateText, removeText, handleContextMenu,
       roomLabels, activeRoomEdit, updateRoomLabel, removeRoomLabel]);
 
+  // ── Preset room names layer — physically isolated memo so鼠标移动 / operator
+  //    drag never re-renders this layer. Only updates when the data or toggle changes.
+  const presetRoomsLayer = useMemo(() => {
+    if (!showRoomNames || isAdvancedMode) return null;
+    const visible = presetRoomLabels.filter(
+      (rl) => !rl.floorId || rl.floorId === currentFloorId,
+    );
+    if (visible.length === 0) return null;
+    return (
+      <Layer listening={false}>
+        <KonvaGroup {...bpTransformProps}>
+          {visible.map((label) => (
+            <KonvaText
+              key={label.id}
+              x={label.x}
+              y={label.y}
+              text={getPresetText(label.text, language)}
+              fontSize={label.fontSize ?? 50}
+              fill={label.fill ?? "#ffffff"}
+              stroke="rgba(0,0,0,0.85)"
+              strokeWidth={4 / bpScale}
+              fillAfterStrokeEnabled={true}
+              fontStyle="bold"
+              rotation={label.rotation ?? 0}
+              scaleX={label.scaleX ?? 1}
+              scaleY={label.scaleY ?? 1}
+              opacity={0.75}
+              listening={false}
+              perfectDrawEnabled={false}
+              shadowForStrokeEnabled={false}
+              hitStrokeWidth={0}
+            />
+          ))}
+        </KonvaGroup>
+      </Layer>
+    );
+  }, [showRoomNames, presetRoomLabels, language, bpTransformProps, currentFloorId, bpScale]);
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="relative flex flex-1 flex-col min-h-0 bg-r6-bg">
@@ -1651,11 +1762,19 @@ export default function MainCanvas({
           label="Reset panel layout"
           onClick={onResetWorkspace}
         />
-        <Divider />
-
         {/* Map selector */}
         <Dropdown value={currentMapId} placeholder={t("select_map", language)} items={mapItems}
-          onChange={(id) => { if (id !== currentMapId) { useBoardStore.getState().clearBoard(); setMap(id); } }} icon={MapPin} minWidth={158} />
+          onChange={(id) => {
+            if (id === currentMapId) return;
+            if (currentProjectId) {
+              if (!window.confirm("切换地图将退出当前项目。未保存的更改将丢失，确定要继续吗？")) return;
+              useBoardStore.getState().resetWorkspace();
+            } else {
+              useBoardStore.getState().clearBoard();
+            }
+            setMap(id);
+          }}
+          icon={MapPin} minWidth={158} />
 
         {/* Floor selector */}
         {map && floorItems.length > 1 && (
@@ -1725,7 +1844,7 @@ export default function MainCanvas({
             <ToolBtn icon={Layers2}     label="Verticality"  active={overlays.vert}   disabled={!floor?.images.verticality}                              onClick={() => toggleOverlay("vert"   as OverlayKey)} />
             <ToolBtn icon={Box}         label="Props"        active={overlays.props}  disabled={!floor?.images.props}                                    onClick={() => toggleOverlay("props"  as OverlayKey)} />
             <ToolBtn icon={ArrowUpDown} label="Stairs"       active={overlays.stairs} disabled={!floor?.images.stairs}                                   onClick={() => toggleOverlay("stairs" as OverlayKey)} />
-            <ToolBtn icon={Type}        label="Room Names"   active={overlays.names}  disabled={!floor?.images.roomNames && roomLabels.filter((rl) => rl.floorId === currentFloorId).length === 0}  onClick={() => toggleOverlay("names"  as OverlayKey)} />
+            <ToolBtn icon={Type}        label="Room Names (T)" active={showRoomNames}  disabled={presetRoomLabels.length === 0 && roomLabels.filter((rl) => rl.floorId === currentFloorId).length === 0}  onClick={toggleRoomNames} />
           </>
         )}
 
@@ -1805,25 +1924,6 @@ export default function MainCanvas({
             <Bot size={14} />
           </button>
         )}
-
-        {/* Save project — icon-only */}
-        <button
-          title={currentProjectId ? "Save project (Ctrl+S)" : "No project open"}
-          onClick={() => {
-            if (!currentProjectId) return;
-            setIsSaving(true);
-            saveCurrentProject().finally(() => setIsSaving(false));
-          }}
-          disabled={!currentProjectId || isSaving}
-          className={cn(
-            "flex shrink-0 h-7 w-7 items-center justify-center rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
-            isSaving
-              ? "bg-r6-accent-dim text-r6-muted-2 border-r6-accent"
-              : "bg-r6-surface-2 text-r6-muted border-r6-border hover:bg-r6-accent-dim hover:text-r6-accent hover:border-r6-accent"
-          )}
-        >
-          {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-        </button>
 
         {/* Export dropdown */}
         <div ref={exportMenuRef} className="relative shrink-0">
@@ -2000,6 +2100,9 @@ export default function MainCanvas({
             >
               {staticLayers}
 
+              {/* Preset room names — memoized isolated layer, zero hot-path overhead */}
+              {presetRoomsLayer}
+
               {/* Operator token layer — isolated from staticLayers so playbackRowIndex / timeline
                   state changes re-render only tokens, never the committed lines / map background. */}
               <Layer>
@@ -2117,7 +2220,7 @@ export default function MainCanvas({
         {/* 绝对定位的独立输入框 */}
         {activeRoomEdit && (
           <textarea
-            autoFocus
+            ref={(el) => el?.focus()}
             defaultValue={activeRoomEdit.text}
             onMouseDown={(e) => e.stopPropagation()}
             style={{
@@ -2229,6 +2332,40 @@ export default function MainCanvas({
                 <ToolBtn icon={icon} label={label} active={tool === id} onClick={() => setTool(id)} />
               </Fragment>
             ))}
+            {/* Upload Labels — only in advanced mode, appears immediately below the room_name tool */}
+            {isAdvancedMode && (
+              <ToolBtn
+                icon={Upload}
+                label="Upload Labels (JSON)"
+                onClick={() => roomLabelsImportRef.current?.click()}
+              />
+            )}
+            {/* Load Defaults to Edit — copies preset labels into dynamic layer for editing */}
+            {isAdvancedMode && (
+              <ToolBtn
+                icon={FileDown}
+                label="Load Defaults to Edit"
+                onClick={() => {
+                  if (currentFloorId && presetRoomLabels && presetRoomLabels.length > 0) {
+                    if (window.confirm("Load default labels into editor? This will overwrite unsaved dynamic labels for this floor.")) {
+                      const coerced = presetRoomLabels.map((def) => ({
+                        id:       def.id,
+                        x:        def.x,
+                        y:        def.y,
+                        text:     typeof def.text === "string" ? def.text : (def.text[language] ?? def.text["en"] ?? ""),
+                        fontSize: def.fontSize  ?? 14,
+                        fill:     def.fill      ?? "#ffffff",
+                        rotation: def.rotation  ?? 0,
+                        scaleX:   def.scaleX    ?? 1,
+                        scaleY:   def.scaleY    ?? 1,
+                        floorId:  def.floorId   ?? currentFloorId,
+                      }));
+                      useBoardStore.getState().setRoomLabelsForFloor(currentFloorId, coerced);
+                    }
+                  }
+                }}
+              />
+            )}
             <div className="w-full h-px bg-r6-border my-0.5" />
             <ToolBtn icon={Trash2} label="Clear floor" onClick={() => {
               useBoardStore.getState().clearFloor(currentPhase, currentFloorId);
@@ -2244,6 +2381,63 @@ export default function MainCanvas({
 
         {/* Floating GIF export window — draggable, opened from Export dropdown */}
         <FloatingExportWindow />
+
+        {/* ── Toast notification ──────────────────────────────────────────── */}
+        {toast && (
+          <div className="absolute bottom-12 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl shadow-lg text-sm font-medium pointer-events-none z-[200] bg-r6-surface-3 border border-r6-border text-r6-text whitespace-nowrap">
+            {toast}
+          </div>
+        )}
+
+        {/* ── Save-as-new project modal ────────────────────────────────────── */}
+        {saveModalOpen && (
+          <div
+            className="absolute inset-0 z-[300] flex items-center justify-center bg-black/60"
+            onClick={(e) => { if (e.target === e.currentTarget) setSaveModalOpen(false); }}
+          >
+            <div className="flex flex-col gap-3 rounded-2xl border border-r6-border bg-r6-surface p-6 shadow-2xl w-80">
+              <h2 className="text-base font-semibold text-r6-text">保存为新项目</h2>
+              <input
+                ref={saveModalInputRef}
+                value={saveModalName}
+                onChange={(e) => setSaveModalName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const name = saveModalName.trim() || "Untitled";
+                    setSaveModalOpen(false);
+                    saveAsNewProject(name).then(() => {
+                      showToast("项目已创建");
+                    });
+                  }
+                  if (e.key === "Escape") setSaveModalOpen(false);
+                }}
+                placeholder="项目名称…"
+                className="rounded-lg px-3 py-2 text-sm outline-none bg-r6-surface-2 border border-r6-border focus:border-r6-accent text-r6-text"
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setSaveModalOpen(false)}
+                  className="rounded-lg px-3 py-1.5 text-sm text-r6-muted hover:text-r6-text transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => {
+                    const name = saveModalName.trim() || "Untitled";
+                    setSaveModalOpen(false);
+                    saveAsNewProject(name).then(() => {
+                      showToast("项目已创建");
+                    });
+                  }}
+                  className="rounded-lg px-3 py-1.5 text-sm font-medium bg-r6-accent text-white hover:opacity-90 transition-opacity"
+                >
+                  创建
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

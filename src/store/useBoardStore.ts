@@ -3,6 +3,7 @@ import { temporal } from "zundo";
 import type { TemporalState } from "zundo";
 import { useCanvasStore } from "./canvasStore";
 import { useUIStore } from "./useUIStore";
+import { useProjectStore } from "./useProjectStore";
 
 // ─── Timeline constants (shared with RightSidebar) ─────────────────────────────
 
@@ -132,6 +133,24 @@ export interface RoomLabel {
   floorId: string | null;
 }
 
+// Multi-language text map used by preset room label definitions.
+export type LocalizedText = { en: string; zh: string; ja: string; [key: string]: string };
+
+// Preset room label loaded from public/names/[mapId]-[floorId]-name.json.
+// text may be a localized object (new format) or a plain string (legacy format).
+export interface RoomLabelDef {
+  id: string;
+  x: number;
+  y: number;
+  text: LocalizedText | string;
+  fontSize?: number;
+  fill?: string;
+  rotation?: number;
+  scaleX?: number;
+  scaleY?: number;
+  floorId?: string | null;
+}
+
 // ─── AI Timeline JSON ──────────────────────────────────────────────────────────
 
 export interface AITimelineStep {
@@ -220,6 +239,12 @@ interface BoardState {
   // Room labels — floor-scoped only (phase-independent static map annotations)
   roomLabels: RoomLabel[];
 
+  // Preset room labels — loaded from public/names/[mapId]-[floorId]-name.json,
+  // multi-language, non-editable by the user.
+  presetRoomLabels: RoomLabelDef[];
+  /** Whether the preset room names overlay is visible (toggled with T key). */
+  showRoomNames: boolean;
+
   // Presentation playback
   isPlaying: boolean;
 
@@ -240,6 +265,12 @@ interface BoardState {
   resizingItemId: string | null;
   // Double-click transform state (Konva Transformer overlay)
   transformingItemId: string | null;
+
+  /**
+   * Incremented by resetWorkspace so MainCanvas can watch it and call fitToScreen / hard-reset
+   * the Konva stage position/scale back to a neutral state.
+   */
+  stageResetToken: number;
 
   // ── Actions ─────────────────────────────────────────────────────────────────
 
@@ -265,6 +296,8 @@ interface BoardState {
   updateRoomLabel: (id: string, updates: Partial<RoomLabel>) => void;
   removeRoomLabel: (id: string) => void;
   setRoomLabelsForFloor: (floorId: string, labels: RoomLabel[]) => void;
+  setPresetRoomLabels: (labels: RoomLabelDef[]) => void;
+  toggleRoomNames: () => void;
   toggleOperatorVisibility: (id: string) => void;
   setPlaybackRowIndex: (i: number) => void;
   setIsPlayingTimeline: (v: boolean) => void;
@@ -283,6 +316,12 @@ interface BoardState {
   clearRoute: (itemId: string) => void;
   /** Bulk-load project data from a parsed JSON object; clears temporal history. */
   loadProjectData: (data: unknown) => void;
+  /**
+   * Full workspace reset: clears all board data, resets phase/UI state, unbinds the active
+   * project (sets currentProjectId → null), and bumps stageResetToken so MainCanvas resets
+   * the Konva viewport back to a neutral position.
+   */
+  resetWorkspace: () => void;
   clearAll: () => void;
   clearBoard: () => void;
   clearFloor: (phase: number, floorId: string | null) => void;
@@ -320,6 +359,8 @@ export const useBoardStore = create<BoardState>()(
       currentPhase: 1,
       texts: [],
       roomLabels: [],
+      presetRoomLabels: [],
+      showRoomNames: false,
       isPlaying: false,
       hiddenOperators: [],
       routeTimeMap: {},
@@ -327,6 +368,7 @@ export const useBoardStore = create<BoardState>()(
       isPlayingTimeline: false,
       resizingItemId: null,
       transformingItemId: null,
+      stageResetToken: 0,
 
       toggleOperatorVisibility: (id) =>
         set((s) => ({
@@ -390,6 +432,8 @@ export const useBoardStore = create<BoardState>()(
             ...labels,
           ],
         })),
+      setPresetRoomLabels: (labels) => set({ presetRoomLabels: labels }),
+      toggleRoomNames: () => set((s) => ({ showRoomNames: !s.showRoomNames })),
 
       setRouteStepStatus: (itemId, step, status) =>
         set((s) => {
@@ -587,6 +631,27 @@ export const useBoardStore = create<BoardState>()(
           else         canvas.setMap(mapId);
         }
         // Clear undo history so loaded state is a clean baseline
+        useBoardStore.temporal.getState().clear();
+      },
+
+      resetWorkspace: () => {
+        set((s) => ({
+          items: [],
+          lines: [],
+          throwableLines: [],
+          videoMarkers: [],
+          texts: [],
+          roomLabels: [],
+          hiddenOperators: [],
+          routeTimeMap: {},
+          currentPhase: 1,
+          showRoomNames: false,
+          resizingItemId: null,
+          transformingItemId: null,
+          stageResetToken: s.stageResetToken + 1,
+        }));
+        useUIStore.getState().setSelectedId(null);
+        useProjectStore.getState().setActiveProjectId(null);
         useBoardStore.temporal.getState().clear();
       },
 

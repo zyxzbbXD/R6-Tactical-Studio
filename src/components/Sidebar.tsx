@@ -17,6 +17,8 @@ import {
   X,
   Wrench,
   Package,
+  Save,
+  Loader2,
 } from "lucide-react";
 import { ATK_OPERATORS, DEF_OPERATORS, GADGETS, OPERATOR_GADGETS, MAPS, type GadgetConfig, type OperatorConfig } from "../config/assets";
 import { useBoardStore } from "../store/useBoardStore";
@@ -137,7 +139,18 @@ export default function Sidebar({
     loadProject,
     createProject,
     deleteProject,
+    saveCurrentProject,
+    saveAsNewProject,
   } = useProjectStore();
+
+  const activeProjectName = currentProjectId
+    ? (projectsList.find((p) => p.id === currentProjectId)?.name ?? "Project")
+    : null;
+
+  const [isSaving,           setIsSaving]           = useState(false);
+  const [saveAsModalOpen,    setSaveAsModalOpen]    = useState(false);
+  const [saveAsModalName,    setSaveAsModalName]    = useState("");
+  const saveAsInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { init(); }, []);
 
@@ -255,6 +268,105 @@ export default function Sidebar({
         </button>
       </div>
 
+      {/* ── Project context block ── */}
+      <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-r6-border min-w-0">
+        {/* Status dot */}
+        <div className={cn(
+          "shrink-0 w-1.5 h-1.5 rounded-full transition-colors",
+          activeProjectName ? "bg-r6-accent" : "bg-r6-muted-2"
+        )} />
+
+        {/* Project name */}
+        <span
+          title={activeProjectName ?? t("unsaved_board", language)}
+          className={cn(
+            "flex-1 min-w-0 truncate text-[13px] leading-none select-none",
+            activeProjectName ? "text-r6-text font-medium" : "text-r6-muted-2 italic font-normal"
+          )}
+        >
+          {activeProjectName ?? t("unsaved_board", language)}
+        </span>
+
+        {/* Save icon button */}
+        <button
+          title={currentProjectId
+            ? `${t("Save", language)} (Ctrl+S)`
+            : t("save_as", language)}
+          disabled={isSaving}
+          onClick={() => {
+            if (currentProjectId) {
+              setIsSaving(true);
+              saveCurrentProject().finally(() => setIsSaving(false));
+            } else {
+              setSaveAsModalName("");
+              setSaveAsModalOpen(true);
+              setTimeout(() => saveAsInputRef.current?.focus(), 0);
+            }
+          }}
+          className="shrink-0 flex items-center justify-center w-6 h-6 rounded-md transition-colors text-r6-muted hover:text-r6-accent hover:bg-r6-accent-dim disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {isSaving
+            ? <Loader2 size={13} className="animate-spin" />
+            : <Save size={13} />}
+        </button>
+
+        {/* Close icon button — only when a project is open */}
+        {currentProjectId && (
+          <button
+            title={t("close_project", language)}
+            onClick={() => useBoardStore.getState().resetWorkspace()}
+            className="shrink-0 flex items-center justify-center w-6 h-6 rounded-md transition-colors text-r6-muted hover:text-red-400 hover:bg-red-900/20"
+          >
+            <X size={13} />
+          </button>
+        )}
+      </div>
+
+      {/* ── Save-as modal ── */}
+      {saveAsModalOpen && (
+        <div className="absolute inset-0 z-[300] flex items-center justify-center bg-black/60">
+          <div className="flex flex-col gap-3 rounded-xl p-5 w-64 bg-r6-surface border border-r6-border shadow-2xl">
+            <h2 className="text-base font-semibold text-r6-text">{t("save_as_title", language)}</h2>
+            <input
+              ref={saveAsInputRef}
+              value={saveAsModalName}
+              onChange={(e) => setSaveAsModalName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  const name = saveAsModalName.trim() || "Untitled";
+                  setSaveAsModalOpen(false);
+                  setIsSaving(true);
+                  saveAsNewProject(name).finally(() => setIsSaving(false));
+                }
+                if (e.key === "Escape") setSaveAsModalOpen(false);
+              }}
+              placeholder={t("project_name_ph", language)}
+              className="rounded-lg px-3 py-2 text-sm outline-none bg-r6-surface-2 border border-r6-border focus:border-r6-accent text-r6-text"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setSaveAsModalOpen(false)}
+                className="rounded-lg px-3 py-1.5 text-sm text-r6-muted hover:text-r6-text transition-colors"
+              >
+                {t("cancel", language)}
+              </button>
+              <button
+                onClick={() => {
+                  const name = saveAsModalName.trim() || "Untitled";
+                  setSaveAsModalOpen(false);
+                  setIsSaving(true);
+                  saveAsNewProject(name).finally(() => setIsSaving(false));
+                }}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium bg-r6-accent text-white hover:opacity-90 transition-opacity"
+              >
+                {t("create", language)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Scrollable content ── */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
 
@@ -291,7 +403,10 @@ export default function Sidebar({
                         className={cn("group flex items-center gap-1 pr-1", isActive ? "bg-r6-accent-dim" : "bg-transparent")}
                       >
                         <button
-                          onClick={() => loadProject(proj.id)}
+                          onClick={() => {
+                            useBoardStore.getState().resetWorkspace();
+                            loadProject(proj.id);
+                          }}
                           onDoubleClick={(e) => {
                             e.preventDefault();
                             setEditingProjectId(proj.id);

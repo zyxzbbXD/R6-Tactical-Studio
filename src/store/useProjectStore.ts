@@ -47,6 +47,14 @@ interface ProjectState {
   renameCurrentProject: (name: string) => Promise<void>;
   renameProject: (id: string, newName: string) => Promise<void>;
   deleteProject: (id: string) => Promise<void>;
+  /**
+   * Save the current canvas/board state as a brand-new project with the given name.
+   * Unlike createProject, this does NOT clear the board — it captures and persists the
+   * existing state, then binds currentProjectId to the newly created project.
+   */
+  saveAsNewProject: (name: string) => Promise<void>;
+  /** Clears the active project binding (sets currentProjectId to null). Called by resetWorkspace. */
+  setActiveProjectId: (id: string | null) => void;
   /** Install an externally-loaded .mty file into the local workspace. */
   installImportedProject: (mty: {
     meta: { id: string; name: string; mapId: string | null; updatedAt: number };
@@ -354,6 +362,53 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       set({ isBusy: false });
     }
   },
+
+  // ── saveAsNewProject ─────────────────────────────────────────────────────────
+
+  saveAsNewProject: async (name: string) => {
+    const trimmed = name.trim() || "Untitled";
+    console.log(`[ProjectStore] saveAsNewProject name="${trimmed}"`);
+    set({ isBusy: true, isSavingProcess: true });
+    try {
+      const board  = useBoardStore.getState();
+      const canvas = useCanvasStore.getState();
+      const id  = crypto.randomUUID();
+      const now = Date.now();
+      const data: ProjectData = {
+        id,
+        name:          trimmed,
+        mapId:         canvas.currentMapId,
+        floorId:       canvas.currentFloorId,
+        activeFloorId: canvas.currentFloorId,
+        activePhase:   board.currentPhase,
+        boardState: {
+          items:           board.items,
+          lines:           board.lines,
+          throwableLines:  board.throwableLines,
+          texts:           board.texts,
+          roomLabels:      board.roomLabels,
+          hiddenOperators: board.hiddenOperators,
+          routeTimeMap:    board.routeTimeMap,
+          videoMarkers:    board.videoMarkers,
+          linkedVideoName: board.videoFileName || null,
+        },
+        notes:         board.notes,
+        updatedAt:     now,
+      };
+      await saveProject(data);
+      set({ currentProjectId: id, lastSavedAt: now });
+      await get().refreshList();
+      console.log(`[ProjectStore] ✓ saveAsNewProject complete id=${id}`);
+    } catch (err) {
+      console.error("[ProjectStore] ❌ saveAsNewProject failed:", err);
+    } finally {
+      set({ isBusy: false, isSavingProcess: false });
+    }
+  },
+
+  // ── setActiveProjectId ───────────────────────────────────────────────────────
+
+  setActiveProjectId: (id) => set({ currentProjectId: id }),
 
   // ── deleteProject ────────────────────────────────────────────────────────────
 

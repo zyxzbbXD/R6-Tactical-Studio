@@ -233,61 +233,34 @@ export default function RightSidebar({
   }, [isAiModeEnabled, rightSidebarTab, setRightSidebarTab]);
 
   // ── Derive the 5 operator columns for the selected side ────────────────────
-  // Phase-scoped only — floor is intentionally ignored so operators remain
-  // pinned in the timeline columns even when viewing a different floor.
-  // Map-based dedup ensures each operatorId gets exactly one column even if
-  // the user placed multiple tokens of the same operator on the canvas.
-  const columnOps = useMemo(() => {
-    const uniqueOps = new Map<string, typeof items[0]>();
+  // Cross-phase aggregation: each entry records every phase's token UUID under
+  // phaseTokens so the timeline can look up the correct item.id per row/phase.
+  type ColOp = {
+    operatorId: string;
+    iconPath:   string;
+    name:       string;
+    side:       "atk" | "def" | "neutral";
+    phaseTokens: Record<number, string>; // phase → item.id
+  };
+  const columnOps = useMemo((): Array<ColOp | null> => {
+    const uniqueOps = new Map<string, ColOp>();
     for (const item of items) {
-      if (item.side === timelineSide && item.phase === currentPhase) {
-        if (!uniqueOps.has(item.operatorId)) {
-          uniqueOps.set(item.operatorId, item);
+      if (item.side === timelineSide) {
+        let opData = uniqueOps.get(item.operatorId);
+        if (!opData) {
+          opData = { operatorId: item.operatorId, iconPath: item.iconPath, name: item.name, side: item.side, phaseTokens: {} };
+          uniqueOps.set(item.operatorId, opData);
         }
+        opData.phaseTokens[item.phase] = item.id;
       }
     }
     const sideItems = Array.from(uniqueOps.values());
     if (timelineSide === "neutral") {
-      // Prop mode: at least 5 columns for visual consistency, no upper cap
-      return Array.from({ length: Math.max(5, sideItems.length) }, (_, i) => sideItems[i] ?? null) as Array<typeof items[0] | null>;
+      return Array.from({ length: Math.max(5, sideItems.length) }, (_, i) => sideItems[i] ?? null);
     }
-    // Operator mode: hard cap at 5, pad with nulls
     const sliced = sideItems.slice(0, 5);
-    return Array.from({ length: 5 }, (_, i) => sliced[i] ?? null) as Array<typeof items[0] | null>;
-  }, [items, timelineSide, currentPhase]);
-
-  // ── O(1) cell render map ────────────────────────────────────────────────────
-  // Pre-compute badge and tail status for every (opId × rowIdx) pair so the
-  // inner render loop does a single Map.get() instead of Object.entries loops.
-  // This memo only re-runs when operator assignments or timing mappings change —
-  // NOT on every playback tick, keeping the grid render cost near zero.
-  const cellRenderMap = useMemo(() => {
-    const map = new Map<string, { badge: string; isTail: boolean }>();
-    for (const op of columnOps) {
-      if (!op) continue;
-      const opMap = routeTimeMap[op.id] ?? {};
-      // Build reverse lookup: rowIdx → badge string
-      const rowToBadge = new Map<number, string>();
-      for (const [stepStr, mappedRow] of Object.entries(opMap)) {
-        if (mappedRow !== undefined) {
-          rowToBadge.set(
-            mappedRow as number,
-            op.side === "neutral" ? "↓" : (STEP_CIRCLE[Number(stepStr) - 1] ?? String(stepStr)),
-          );
-        }
-      }
-      const deployRow: number | undefined = op.side === "neutral" ? (opMap[1] as number | undefined) : undefined;
-      const isContinuous = op.side === "neutral" && CONTINUOUS_PROPS.has(op.operatorId);
-      for (let rowIdx = 0; rowIdx < TIMELINE_ROWS.length; rowIdx++) {
-        const badge = rowToBadge.get(rowIdx);
-        const isTail = isContinuous && deployRow !== undefined && rowIdx > deployRow && !badge;
-        if (badge !== undefined || isTail) {
-          map.set(`${op.id}-${rowIdx}`, { badge: badge ?? "", isTail });
-        }
-      }
-    }
-    return map;
-  }, [columnOps, routeTimeMap]);
+    return Array.from({ length: 5 }, (_, i) => sliced[i] ?? null);
+  }, [items, timelineSide]);
 
   // Every row is mapped to a tactical phase so the canvas always stays in sync.
   // Row 0 is included so looping back restores phase 1.
@@ -298,6 +271,61 @@ export default function RightSidebar({
     [PHASE_START_ROW[4]]: 4, // row 17 → Late
   };
   const LAST_ROW = TIMELINE_ROWS.length - 1; // 23
+
+  // Hoisted above cellRenderMap so the memo can call it directly.
+  const getPhaseForRow = (row: number): number => {
+    if (row <= 4)  return 1;
+    if (row <= 10) return 2;
+    if (row <= 16) return 3;
+    return 4;
+  };
+
+  // ── O(1) cell render map ────────────────────────────────────────────────────
+  // Cross-phase: for each row we resolve the correct token ID via phaseTokens,
+  // so badges stay accurate when currentPhase changes.
+  // This memo only re-runs when operator assignments or timing mappings change —
+  // NOT on every playback tick, keeping the grid render cost near zero.
+  const cellRenderMap = useMemo(() => {
+    const map = new Map<string, { badge: string; isTail: boolean }>();
+    for (const col of columnOps) {
+      if (!col) continue;
+      const isContinuous = col.side === "neutral" && CONTINUOUS_PROPS.has(col.operatorId);
+
+      // For continuous props, find the earliest deploy row across all phases
+      let globalDeployRow: number | undefined = undefined;
+      if (isContinuous) {
+        for (let p = 1; p <= 4; p++) {
+          const tid = col.phaseTokens[p];
+          if (tid && routeTimeMap[tid]?.[1] !== undefined) {
+            globalDeployRow = routeTimeMap[tid][1] as number;
+            break;
+          }
+        }
+      }
+
+      for (let rowIdx = 0; rowIdx < TIMELINE_ROWS.length; rowIdx++) {
+        const rowPhase = getPhaseForRow(rowIdx);
+        const tokenId  = col.phaseTokens[rowPhase];
+        let badge: string | undefined = undefined;
+
+        if (tokenId) {
+          const opMap = routeTimeMap[tokenId] ?? {};
+          for (const [stepStr, mappedRow] of Object.entries(opMap)) {
+            if (mappedRow === rowIdx) {
+              badge = col.side === "neutral" ? "↓" : (STEP_CIRCLE[Number(stepStr) - 1] ?? String(stepStr));
+              break;
+            }
+          }
+        }
+
+        const isTail = isContinuous && globalDeployRow !== undefined && rowIdx > globalDeployRow && !badge;
+        if (badge !== undefined || isTail) {
+          map.set(`${col.operatorId}-${rowIdx}`, { badge: badge ?? "", isTail });
+        }
+      }
+    }
+    return map;
+  }, [columnOps, routeTimeMap]);
 
   // ── Timeline playback interval ──────────────────────────────────────────────
   useEffect(() => {
@@ -322,14 +350,6 @@ export default function RightSidebar({
     return () => clearInterval(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlayingTimeline]);
-
-  // ── Timeline helpers ────────────────────────────────────────────────────────
-  const getPhaseForRow = (row: number): number => {
-    if (row <= 4)  return 1;
-    if (row <= 10) return 2;
-    if (row <= 16) return 3;
-    return 4;
-  };
 
   const handleJumpToRow = (rowIndex: number) => {
     setPlaybackRowIndex(rowIndex);
@@ -506,22 +526,38 @@ export default function RightSidebar({
                     </span>
                     {op ? (
                       <>
-                        <button
-                          onClick={() => toggleOperatorVisibility(op.id)}
-                          title={`${op.name} — ${hiddenOperators.includes(op.id) ? "Show" : "Hide"}`}
-                          className={cn(
-                            "relative rounded overflow-hidden transition-opacity",
-                            hiddenOperators.includes(op.id) ? "opacity-30" : "opacity-100"
-                          )}
-                        >
-                          <img
-                            src={op.iconPath}
-                            alt={op.name}
-                            className="block"
-                            style={{ width: 28, height: 28, objectFit: "cover" }}
-                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-                          />
-                        </button>
+                        {(() => {
+                          const currentTokenId = op.phaseTokens[currentPhase];
+                          const isHidden = currentTokenId
+                            ? hiddenOperators.includes(currentTokenId)
+                            : Object.values(op.phaseTokens).some((id) => hiddenOperators.includes(id));
+                          return (
+                            <button
+                              onClick={() => {
+                                const targetHidden = !isHidden;
+                                Object.values(op.phaseTokens).forEach((tId) => {
+                                  const currentlyHidden = hiddenOperators.includes(tId);
+                                  if (currentlyHidden !== targetHidden) {
+                                    toggleOperatorVisibility(tId);
+                                  }
+                                });
+                              }}
+                              title={`${op.name} — ${isHidden ? "Show" : "Hide"}`}
+                              className={cn(
+                                "relative rounded overflow-hidden transition-opacity",
+                                isHidden ? "opacity-30" : "opacity-100"
+                              )}
+                            >
+                              <img
+                                src={op.iconPath}
+                                alt={op.name}
+                                className="block"
+                                style={{ width: 28, height: 28, objectFit: "cover" }}
+                                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                              />
+                            </button>
+                          );
+                        })()}
                       </>
                     ) : (
                       <span className="text-[9px] text-r6-muted-2">—</span>
@@ -581,8 +617,8 @@ export default function RightSidebar({
 
                       {/* Operator / Prop cells */}
                       {columnOps.map((op, ci) => {
-                        // O(1) lookup — all badge/tail logic is pre-computed in cellRenderMap
-                        const cellInfo = op ? cellRenderMap.get(`${op.id}-${rowIdx}`) : undefined;
+                        // O(1) lookup — key uses operatorId (stable across phases)
+                        const cellInfo = op ? cellRenderMap.get(`${op.operatorId}-${rowIdx}`) : undefined;
                         const badge = cellInfo?.badge ?? null;
                         const isActivePropTail = cellInfo?.isTail ?? false;
 
@@ -591,8 +627,13 @@ export default function RightSidebar({
                             key={ci}
                             onClick={() => {
                               if (!op) return;
-                              // Gadgets always bind to step 1 (deploy event)
-                              handleCellClick(op.id, rowIdx, op.side === "neutral" ? 1 : undefined);
+                              const rowPhase = getPhaseForRow(rowIdx);
+                              const tokenId  = op.phaseTokens[rowPhase];
+                              if (!tokenId) {
+                                alert("请先在该阶段的地图上放置此干员/道具！");
+                                return;
+                              }
+                              handleCellClick(tokenId, rowIdx, op.side === "neutral" ? 1 : undefined);
                             }}
                             className={cn(
                               "relative flex min-w-[54px] shrink-0 items-center justify-center border-r text-[12px] last:border-r-0",
