@@ -660,7 +660,7 @@ export const useBoardStore = create<BoardState>()(
         useBoardStore.temporal.getState().clear();
       },
       clearBoard: () => {
-        set({ items: [], lines: [], throwableLines: [], texts: [], roomLabels: [], notes: "", hiddenOperators: [], routeTimeMap: {} });
+        set({ items: [], lines: [], throwableLines: [], texts: [], roomLabels: [], notes: "", hiddenOperators: [], routeTimeMap: {}, showRoomNames: false });
         useBoardStore.temporal.getState().clear();
       },
       clearFloor: (phase, floorId) => {

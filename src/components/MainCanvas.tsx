@@ -314,7 +314,7 @@ const MapImageLayer = memo(function MapImageLayer({
   // In blueprint view: use the locally-computed center (from alpha-scan of the blueprint PNG).
   // In other views: use the passed-in blueprint center so both layers pivot at the same point.
   const center = (!isBlueprint && externalCenter) ? externalCenter : internalCenter;
-  const applyScale = blueprintScaleMode === "standard" && (isBlueprint || externalCenter != null);
+  const applyScale = blueprintScaleMode === "standard" && (isBlueprint || externalCenter != null) && currentView !== "isometric";
   const imgProps = applyScale
     ? { x: 3200, y: 1800, offsetX: center.x, offsetY: center.y, scaleX: blueprintManualScale, scaleY: blueprintManualScale }
     : { x: 0,    y: 0,    offsetX: 0,        offsetY: 0,        scaleX: 1,                    scaleY: 1                    };
@@ -814,6 +814,14 @@ export default function MainCanvas({
   // Reset both on map/floor change.
   useEffect(() => { setBuildingCenter(null); setBlueprintCenter(null); }, [currentMapId, currentFloorId]);
 
+  // Reset standard-scale and room-names when entering 3D (isometric) view — incompatible with both.
+  useEffect(() => {
+    if (currentView === "isometric") {
+      if (blueprintScaleMode === "standard") setBlueprintScaleMode("default");
+      if (useBoardStore.getState().showRoomNames) useBoardStore.getState().toggleRoomNames();
+    }
+  }, [currentView]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Stable callback ref so MapImageLayer (memo) doesn't re-render just because currentView changed.
   const currentViewRef = useRef(currentView);
   currentViewRef.current = currentView;
@@ -826,9 +834,9 @@ export default function MainCanvas({
   // Effective pivot: prefer the blueprint-image center; fall back to whatever was computed last.
   const effectiveCenter = blueprintCenter ?? buildingCenter;
   const isStandardScale = blueprintScaleMode === "standard";
-  // Transform is active for ALL views once we have a pivot, not just blueprint view.
-  const isStandardBp = isStandardScale && effectiveCenter != null;
-  const bpScale   = isStandardScale ? (BLUEPRINT_MANUAL_SCALES[currentMapId ?? ""] ?? 1.0) : 1.0;
+  // Transform is active for non-isometric views once we have a pivot, not just blueprint view.
+  const isStandardBp = isStandardScale && effectiveCenter != null && currentView !== "isometric";
+  const bpScale   = (isStandardScale && currentView !== "isometric") ? (BLUEPRINT_MANUAL_SCALES[currentMapId ?? ""] ?? 1.0) : 1.0;
   const bpOffsetX = effectiveCenter?.x ?? 0;
   const bpOffsetY = effectiveCenter?.y ?? 0;
   // Render-scale compensation: keeps strokes and operator icons visually consistent
@@ -1059,7 +1067,7 @@ export default function MainCanvas({
       if (e.key === "p" || e.key === "P") setTool("pen");
       if (e.key === "a" || e.key === "A") setTool("arrow");
       if (e.key === "e" || e.key === "E") setTool("eraser");
-      if (e.key === "t" || e.key === "T") { toggleRoomNames(); return; }
+      if (e.key === "t" || e.key === "T") { if (currentView !== "isometric") toggleRoomNames(); return; }
       if (e.key === "r" || e.key === "R") setTool("route");
       if (e.key === "x" || e.key === "X") setTool("text");
       if (e.key === " ") { e.preventDefault(); setIsPlaying(!isPlaying); }
@@ -1115,7 +1123,7 @@ export default function MainCanvas({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [setTool, tool, setCurrentRouteStep, undo, currentProjectId, saveCurrentProject, isPlaying, setIsPlaying, selectedId, items, addItem, toggleRoomNames]);
+  }, [setTool, tool, setCurrentRouteStep, undo, currentProjectId, saveCurrentProject, isPlaying, setIsPlaying, selectedId, items, addItem, toggleRoomNames, currentView]);
 
   // ── Wheel zoom ─────────────────────────────────────────────────────────────
   // Wheel zoom: bypass React state entirely — write directly to Konva stage.
@@ -1842,9 +1850,9 @@ export default function MainCanvas({
         {map && (
           <>
             <ToolBtn icon={Layers2}     label="Verticality"  active={overlays.vert}   disabled={!floor?.images.verticality}                              onClick={() => toggleOverlay("vert"   as OverlayKey)} />
-            <ToolBtn icon={Box}         label="Props"        active={overlays.props}  disabled={!floor?.images.props}                                    onClick={() => toggleOverlay("props"  as OverlayKey)} />
-            <ToolBtn icon={ArrowUpDown} label="Stairs"       active={overlays.stairs} disabled={!floor?.images.stairs}                                   onClick={() => toggleOverlay("stairs" as OverlayKey)} />
-            <ToolBtn icon={Type}        label="Room Names (T)" active={showRoomNames}  disabled={presetRoomLabels.length === 0 && roomLabels.filter((rl) => rl.floorId === currentFloorId).length === 0}  onClick={toggleRoomNames} />
+            <ToolBtn icon={Box}         label={currentView === "isometric" ? "Props (3D 不可用)" : "Props"}                 active={overlays.props}  disabled={!floor?.images.props   || currentView === "isometric"}  onClick={() => toggleOverlay("props"  as OverlayKey)} />
+            <ToolBtn icon={ArrowUpDown} label="Stairs"       active={overlays.stairs} disabled={!floor?.images.stairs}                                                           onClick={() => toggleOverlay("stairs" as OverlayKey)} />
+            <ToolBtn icon={Type}        label={currentView === "isometric" ? "Room Names (3D 不可用)" : "Room Names (T)"}  active={showRoomNames}   disabled={(presetRoomLabels.length === 0 && roomLabels.filter((rl) => rl.floorId === currentFloorId).length === 0) || currentView === "isometric"}  onClick={toggleRoomNames} />
           </>
         )}
 

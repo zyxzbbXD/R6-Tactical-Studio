@@ -70,6 +70,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       currentFloorId: map?.floors[0]?.id ?? null,
       currentView: "default",
       overlays: { ...DEFAULT_OVERLAYS },
+      blueprintScaleMode: "default",
     });
   },
 
@@ -79,10 +80,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const map = get().maps.find((m) => m.id === mapId);
     const validFloor = map?.floors.find((f) => f.id === floorId);
     set({
-      currentMapId:   mapId,
-      currentFloorId: validFloor?.id ?? map?.floors[0]?.id ?? null,
-      currentView:    "default",
-      overlays:       { ...DEFAULT_OVERLAYS },
+      currentMapId:        mapId,
+      currentFloorId:      validFloor?.id ?? map?.floors[0]?.id ?? null,
+      currentView:         "default",
+      overlays:            { ...DEFAULT_OVERLAYS },
+      blueprintScaleMode:  "default",
     });
   },
   setView: (view) => set({ currentView: view }),
