@@ -1679,8 +1679,8 @@ export default function MainCanvas({
               fontSize={label.fontSize}
               fontFamily={SAFE_FONT_FAMILY}
               fill={label.fill || "#ffffff"}
-              stroke="rgba(0,0,0,0.85)"
-              strokeWidth={4 / bpScale}
+              stroke="rgba(0,0,0,0.75)"
+              strokeWidth={2 / bpScale}
               fillAfterStrokeEnabled={true}
               fontStyle="bold"
               rotation={label.rotation}
@@ -1716,7 +1716,8 @@ export default function MainCanvas({
       items, selectedId,
       updateItem, removeLine, removeThrowableLine, clearRoute,
       texts, editingTextId, updateText, removeText, handleContextMenu,
-      roomLabels, activeRoomEdit, updateRoomLabel, removeRoomLabel]);
+      roomLabels, activeRoomEdit, updateRoomLabel, removeRoomLabel,
+      showRoomNames, isAdvancedMode]);
 
   // ── Preset room names layer — physically isolated memo so鼠标移动 / operator
   //    drag never re-renders this layer. Only updates when the data or toggle changes.
@@ -1738,8 +1739,8 @@ export default function MainCanvas({
               fontSize={label.fontSize ?? 50}
               fontFamily={SAFE_FONT_FAMILY}
               fill={label.fill ?? "#ffffff"}
-              stroke="rgba(0,0,0,0.85)"
-              strokeWidth={4 / bpScale}
+              stroke="rgba(0,0,0,0.75)"
+              strokeWidth={2 / bpScale}
               fillAfterStrokeEnabled={true}
               fontStyle="bold"
               rotation={label.rotation ?? 0}
