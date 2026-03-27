@@ -25,6 +25,11 @@ import {
   Spline, Route, MessageSquare, Tag, TableProperties,
 
 } from "lucide-react";
+// Cross-platform safe font stack — Canvas (Konva) silently renders nothing on Windows
+// if the requested font is missing. "Segoe UI" is the Windows system default; Arial is
+// the universal last-resort fallback available on every OS that supports Canvas.
+const SAFE_FONT_FAMILY = '"Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif';
+
 // Hardcoded blueprint scale factors per map id.
 // Each value scales the blueprint image so it visually fills the 6400×3600 canvas.
 // Maps not listed fall back to 1.0.
@@ -1670,9 +1675,10 @@ export default function MainCanvas({
               key={label.id}
               x={label.x}
               y={label.y}
-              text={activeRoomEdit?.id === label.id ? "" : label.text}
+              text={activeRoomEdit?.id === label.id ? "" : (label.text || "")}
               fontSize={label.fontSize}
-              fill={label.fill}
+              fontFamily={SAFE_FONT_FAMILY}
+              fill={label.fill || "#ffffff"}
               stroke="rgba(0,0,0,0.85)"
               strokeWidth={4 / bpScale}
               fillAfterStrokeEnabled={true}
@@ -1730,6 +1736,7 @@ export default function MainCanvas({
               y={label.y}
               text={getPresetText(label.text, language)}
               fontSize={label.fontSize ?? 50}
+              fontFamily={SAFE_FONT_FAMILY}
               fill={label.fill ?? "#ffffff"}
               stroke="rgba(0,0,0,0.85)"
               strokeWidth={4 / bpScale}
