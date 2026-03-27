@@ -28,7 +28,7 @@ import {
 // Cross-platform safe font stack — Canvas (Konva) silently renders nothing on Windows
 // if the requested font is missing. "Segoe UI" is the Windows system default; Arial is
 // the universal last-resort fallback available on every OS that supports Canvas.
-const SAFE_FONT_FAMILY = '"Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif';
+const SAFE_FONT_FAMILY = 'Arial, sans-serif';
 
 // Hardcoded blueprint scale factors per map id.
 // Each value scales the blueprint image so it visually fills the 6400×3600 canvas.
@@ -1747,7 +1747,6 @@ export default function MainCanvas({
               scaleY={label.scaleY ?? 1}
               opacity={0.75}
               listening={false}
-              perfectDrawEnabled={false}
               shadowForStrokeEnabled={false}
               hitStrokeWidth={0}
             />
