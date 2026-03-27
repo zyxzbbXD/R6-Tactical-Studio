@@ -1348,6 +1348,15 @@ export default function MainCanvas({
       .catch(() => setPresetRoomLabels([]));
   }, [currentMapId, currentFloorId, setPresetRoomLabels]);
 
+  // ── [TRACER] Type sniffer — diagnose Windows NaN-coordinate silent-drop bug ──
+  useEffect(() => {
+    if (roomLabels.length > 0) {
+      console.log("[Tracer] Label 0 Data:", roomLabels[0]);
+      console.log("[Tracer] Type of X/Y:", typeof roomLabels[0].x, typeof roomLabels[0].y);
+      console.log("[Tracer] X/Y values:", roomLabels[0].x, roomLabels[0].y);
+    }
+  }, [roomLabels]);
+
   /** Resolve localized text from a preset label. Falls back to English, then the raw value. */
   const getPresetText = (text: RoomLabelDef["text"], lang: string): string => {
     if (typeof text === "string") return text;
@@ -1750,6 +1759,10 @@ export default function MainCanvas({
       : [];
     return (
       <Layer listening={false}>
+        {/* ── WIN_TEST tracer — hardcoded, no state, no scale — remove after diagnosis ── */}
+        <KonvaRect x={0} y={0} width={500} height={500} fill="red" opacity={0.8} listening={false} />
+        <KonvaText x={50} y={50} text="WIN_TEST" fontSize={100} fill="lime" fontFamily="Arial" listening={false} />
+        {/* ── end tracer ── */}
         <KonvaGroup {...(show ? bpTransformProps : {})}>
           {visible.map((label) => (
             <KonvaText
