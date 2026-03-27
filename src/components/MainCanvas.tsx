@@ -30,6 +30,10 @@ import {
 // the universal last-resort fallback available on every OS that supports Canvas.
 const SAFE_FONT_FAMILY = 'Arial, sans-serif';
 
+// Strip UTF-8 BOM (U+FEFF) that Windows text editors / Notepad add to JSON files.
+// Chromium's JSON.parse rejects the BOM and silently fails, leaving labels unloaded.
+const stripBOM = (s: string): string => (s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s);
+
 // Hardcoded blueprint scale factors per map id.
 // Each value scales the blueprint image so it visually fills the 6400×3600 canvas.
 // Maps not listed fall back to 1.0.
@@ -1338,8 +1342,9 @@ export default function MainCanvas({
   useEffect(() => {
     if (!currentMapId || !currentFloorId) { setPresetRoomLabels([]); return; }
     fetch(`/names/${currentMapId}-${currentFloorId}-name.json`)
-      .then((res) => { if (res.ok) return res.json(); throw new Error("not found"); })
-      .then((data: RoomLabelDef[]) => setPresetRoomLabels(data))
+      .then((res) => { if (res.ok) return res.text(); throw new Error("not found"); })
+      .then((text) => JSON.parse(stripBOM(text)) as RoomLabelDef[])
+      .then((data) => setPresetRoomLabels(data))
       .catch(() => setPresetRoomLabels([]));
   }, [currentMapId, currentFloorId, setPresetRoomLabels]);
 
@@ -1364,14 +1369,22 @@ export default function MainCanvas({
   const handleImportRoomLabels = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !currentFloorId) return;
-    e.target.value = "";
+    const inputEl = e.target; // capture before async — React synthetic events may be nulled
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
-        const data = JSON.parse(ev.target?.result as string);
+        const rawText = ev.target?.result as string;
+        if (!rawText) return;
+        // Strip Windows UTF-8 BOM (0xEF BB BF / \uFEFF) that Notepad & some editors silently prepend
+        const cleanText = rawText.replace(/^\uFEFF/, '').trim();
+        const data = JSON.parse(cleanText);
         useBoardStore.getState().setRoomLabelsForFloor(currentFloorId, data);
-      } catch {
-        alert("导入失败：JSON 格式不正确");
+      } catch (error) {
+        console.error("Failed to parse Room Labels JSON:", error);
+        alert("加载失败：JSON 文件格式损坏或包含非法字符。");
+      } finally {
+        // Always clear the input so the same file can be re-selected on the next upload
+        inputEl.value = '';
       }
     };
     reader.readAsText(file);
@@ -1380,11 +1393,15 @@ export default function MainCanvas({
   const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    e.target.value = "";
+    const inputEl = e.target;
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
-        const parsed = JSON.parse(ev.target?.result as string);
+        const rawText = ev.target?.result as string;
+        if (!rawText) return;
+        // Strip UTF-8 BOM that Windows editors (Notepad, Excel) silently prepend
+        const cleanText = rawText.replace(/^\uFEFF/, '').trim();
+        const parsed = JSON.parse(cleanText);
         const data = parsed.payload
           ? { ...parsed.payload.boardState, notes: parsed.payload.notes, floorId: parsed.payload.floorId, mapId: parsed.meta?.mapId }
           : parsed;
@@ -1392,6 +1409,8 @@ export default function MainCanvas({
       } catch {
         console.error("❌ [Import] Failed to parse .mty project file");
         alert("Import failed: invalid or corrupted .mty file.");
+      } finally {
+        inputEl.value = '';
       }
     };
     reader.readAsText(file);
@@ -1722,14 +1741,16 @@ export default function MainCanvas({
   // ── Preset room names layer — physically isolated memo so鼠标移动 / operator
   //    drag never re-renders this layer. Only updates when the data or toggle changes.
   const presetRoomsLayer = useMemo(() => {
-    if (!showRoomNames || isAdvancedMode) return null;
-    const visible = presetRoomLabels.filter(
-      (rl) => !rl.floorId || rl.floorId === currentFloorId,
-    );
-    if (visible.length === 0) return null;
+    // Always mount the <Layer> — unmounting/remounting a Konva Layer shifts layer indices
+    // and causes WebView2 / Chromium to lose track of canvas nodes on subsequent renders.
+    // Visibility is controlled by rendering an empty KonvaGroup instead.
+    const show = showRoomNames && !isAdvancedMode;
+    const visible = show
+      ? presetRoomLabels.filter((rl) => !rl.floorId || rl.floorId === currentFloorId)
+      : [];
     return (
       <Layer listening={false}>
-        <KonvaGroup {...bpTransformProps}>
+        <KonvaGroup {...(show ? bpTransformProps : {})}>
           {visible.map((label) => (
             <KonvaText
               key={label.id}
@@ -1755,7 +1776,7 @@ export default function MainCanvas({
         </KonvaGroup>
       </Layer>
     );
-  }, [showRoomNames, presetRoomLabels, language, bpTransformProps, currentFloorId, bpScale]);
+  }, [showRoomNames, isAdvancedMode, presetRoomLabels, language, bpTransformProps, currentFloorId, bpScale]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
