@@ -11,10 +11,9 @@ import { useResizable } from "./hooks/useResizable";
 import { useBoardStore } from "./store/useBoardStore";
 import { useProjectStore } from "./store/useProjectStore";
 import { useUIStore } from "./store/useUIStore";
-import { useCanvasStore } from "./store/canvasStore";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { cn } from "./utils/cn";
+import { useNativeMenu } from "./hooks/useNativeMenu";
 
 // ── Root font-size scaling ───────────────────────────────────────────────────
 
@@ -109,126 +108,7 @@ function App() {
   }, []);
 
   // ── Native menu event listeners ──────────────────────────────────────────
-  useEffect(() => {
-    const unlisten: Array<() => void> = [];
-
-    (async () => {
-      // menu-new — confirm then create a blank project
-      unlisten.push(await listen("menu-new", async () => {
-        const name = window.prompt("New project name:", "Untitled Project");
-        if (name === null) return; // user cancelled
-        await useProjectStore.getState().createProject(name.trim() || "Untitled Project");
-      }));
-
-      // menu-open — native file-open dialog → read → install
-      unlisten.push(await listen("menu-open", async () => {
-        try {
-          const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
-          const { readTextFile } = await import("@tauri-apps/plugin-fs");
-
-          const selected = await openDialog({
-            multiple: false,
-            filters: [{ name: "R6 Tactical Project", extensions: ["mty"] }],
-          });
-          if (!selected) return;
-          const filePath = typeof selected === "string" ? selected : selected[0];
-          if (!filePath) return;
-
-          const raw = await readTextFile(filePath);
-          const parsed = JSON.parse(raw);
-          const fallbackName = filePath
-            .split(/[/\\]/)
-            .pop()
-            ?.replace(/\.mty$/i, "")
-            .trim() || "Untitled_Project";
-
-          if (parsed.payload) {
-            if (!parsed.meta?.name?.trim()) {
-              parsed.meta = { ...parsed.meta, name: fallbackName };
-            }
-            await useProjectStore.getState().installImportedProject(parsed);
-          } else {
-            useBoardStore.getState().loadProjectData(parsed);
-            useUIStore.getState().setTool("cursor");
-          }
-        } catch (err) {
-          console.error("❌ [menu-open] Failed to open file:", err);
-        }
-      }));
-
-      // menu-save — persist current project to disk
-      unlisten.push(await listen("menu-save", async () => {
-        await useProjectStore.getState().saveCurrentProject();
-      }));
-
-      // menu-export — download .mty file (mirrors FloatingExportWindow logic)
-      unlisten.push(await listen("menu-export", () => {
-        const board   = useBoardStore.getState();
-        const canvas  = useCanvasStore.getState();
-        const { currentProjectId, projectsList } = useProjectStore.getState();
-        const projectName   = projectsList.find((p) => p.id === currentProjectId)?.name ?? "Untitled_Project";
-        const sanitizedName = projectName.replace(/[\\/:*?"<>|]/g, "_");
-        const now = Date.now();
-        const mty = {
-          version: "1.0",
-          meta: {
-            id:        currentProjectId ?? crypto.randomUUID(),
-            name:      projectName,
-            mapId:     canvas.currentMapId,
-            updatedAt: now,
-          },
-          payload: {
-            boardState: {
-              items:           board.items,
-              lines:           board.lines,
-              throwableLines:  board.throwableLines,
-              texts:           board.texts,
-              roomLabels:      board.roomLabels,
-              hiddenOperators: board.hiddenOperators,
-              routeTimeMap:    board.routeTimeMap,
-              videoMarkers:    board.videoMarkers,
-              linkedVideoName: board.videoFileName || null,
-            },
-            notes:         board.notes,
-            floorId:       canvas.currentFloorId,
-            activeFloorId: canvas.currentFloorId,
-            activePhase:   board.currentPhase,
-          },
-        };
-        const blob = new Blob([JSON.stringify(mty, null, 2)], { type: "application/json" });
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement("a");
-        a.href     = url;
-        a.download = `${sanitizedName}.mty`;
-        a.click();
-        URL.revokeObjectURL(url);
-      }));
-
-      // menu-undo / menu-redo — zundo temporal store
-      // Guard: skip when a text input is focused OR the room-label editor is open.
-      const isEditingText = () => {
-        const el = document.activeElement;
-        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return true;
-        if (useUIStore.getState().isEditingRoomLabel) return true;
-        return false;
-      };
-
-      unlisten.push(await listen("menu-undo", () => {
-        if (isEditingText()) return;
-        useBoardStore.temporal.getState().undo();
-      }));
-
-      unlisten.push(await listen("menu-redo", () => {
-        if (isEditingText()) return;
-        useBoardStore.temporal.getState().redo();
-      }));
-    })();
-
-    // Cleanup: unsubscribe all listeners on unmount
-    return () => {
-      unlisten.forEach((fn) => fn());
-    };
-  }, []);
+  useNativeMenu();
 
   // Theme sync
   useEffect(() => {

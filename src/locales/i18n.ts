@@ -151,6 +151,7 @@ const dict: Record<string, Record<string, string>> = {
     "project_name_ph": "Project name…",
     "cancel": "Cancel",
     "create": "Create",
+    "copy_operator_blocked": "Operators cannot be copied",
   },
   zh: {
     Projects: "项目",
@@ -301,6 +302,7 @@ const dict: Record<string, Record<string, string>> = {
     "project_name_ph": "项目名称…",
     "cancel": "取消",
     "create": "创建",
+    "copy_operator_blocked": "干员图标无法复制",
   },
   ja: {
     Projects: "プロジェクト",
@@ -451,6 +453,7 @@ const dict: Record<string, Record<string, string>> = {
     "project_name_ph": "プロジェクト名…",
     "cancel": "キャンセル",
     "create": "作成",
+    "copy_operator_blocked": "オペレーターはコピーできません",
   },
   ko: {
     Projects: "프로젝트",
@@ -601,6 +604,7 @@ const dict: Record<string, Record<string, string>> = {
     "project_name_ph": "프로젝트 이름…",
     "cancel": "취소",
     "create": "생성",
+    "copy_operator_blocked": "오퍼레이터는 복사할 수 없습니다",
   },
   fr: {
     Projects: "Projets",
@@ -751,6 +755,7 @@ const dict: Record<string, Record<string, string>> = {
     "project_name_ph": "Nom du projet…",
     "cancel": "Annuler",
     "create": "Créer",
+    "copy_operator_blocked": "Les agents ne peuvent pas être copiés",
   },
   pt: {
     Projects: "Projetos",
@@ -901,6 +906,7 @@ const dict: Record<string, Record<string, string>> = {
     "project_name_ph": "Nome do projeto…",
     "cancel": "Cancelar",
     "create": "Criar",
+    "copy_operator_blocked": "Operadores não podem ser copiados",
   },
 };
 

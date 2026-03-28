@@ -1,6 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCanvasDraw } from "../hooks/useCanvasDraw";
 import { useCanvasExport } from "../hooks/useCanvasExport";
+import { useCanvasHotkeys, type CopiedPayload } from "../hooks/useCanvasHotkeys";
 import {
   Stage, Layer,
   Image as KonvaImage,
@@ -64,6 +65,7 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { useProjectStore } from "../store/useProjectStore";
 import { t } from "../locales/i18n";
 import { cn } from "../utils/cn";
+import { generateMtyPayload, downloadMtyFile, sanitizeFileName } from "../utils/mtySerializer";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -687,7 +689,6 @@ export default function MainCanvas({
   );
 
   // ── Project store (save) ───────────────────────────────────────────────────
-  const saveCurrentProject = useProjectStore((s) => s.saveCurrentProject);
   const saveAsNewProject   = useProjectStore((s) => s.saveAsNewProject);
   const currentProjectId   = useProjectStore((s) => s.currentProjectId);
   const [isExportOpen,     setIsExportOpen]  = useState(false);
@@ -736,11 +737,11 @@ export default function MainCanvas({
     addItem, updateItem, removeItem,
     removeLine,
     removeThrowableLine,
-    deleteRouteStep, clearRoute,
+    clearRoute,
     updateText, removeText,
     updateRoomLabel, removeRoomLabel,
     setRouteStepStatus,
-    isPlaying, setIsPlaying,
+    isPlaying,
     hiddenOperators,
     routeTimeMap,
     isPlayingTimeline,
@@ -760,11 +761,11 @@ export default function MainCanvas({
     addItem: s.addItem, updateItem: s.updateItem, removeItem: s.removeItem,
     removeLine: s.removeLine,
     removeThrowableLine: s.removeThrowableLine,
-    deleteRouteStep: s.deleteRouteStep, clearRoute: s.clearRoute,
+    clearRoute: s.clearRoute,
     updateText: s.updateText, removeText: s.removeText,
     updateRoomLabel: s.updateRoomLabel, removeRoomLabel: s.removeRoomLabel,
     setRouteStepStatus: s.setRouteStepStatus,
-    isPlaying: s.isPlaying, setIsPlaying: s.setIsPlaying,
+    isPlaying: s.isPlaying,
     hiddenOperators: s.hiddenOperators,
     routeTimeMap: s.routeTimeMap,
     isPlayingTimeline: s.isPlayingTimeline,
@@ -776,12 +777,17 @@ export default function MainCanvas({
 
   // ── Local UI state ────────────────────────────────────────────────────────
   const [selectedId,    setSelectedId]    = useState<string | null>(null);
-  const copiedItemRef = useRef<BoardItem | null>(null);
+  const copiedItemRef = useRef<CopiedPayload | null>(null);
   const [editingTextId,  setEditingTextId]  = useState<string | null>(null);
   const [activeRoomEdit, setActiveRoomEdit] = useState<{ id: string; x: number; y: number; text: string; screenX: number; screenY: number } | null>(null);
   // Ref tracks activeRoomEdit for use in the document-level keydown handler (stale-closure-safe)
   const activeRoomEditRef = useRef(activeRoomEdit);
   activeRoomEditRef.current = activeRoomEdit;
+  // Refs kept fresh every render so useCanvasHotkeys never sees stale values
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const isEditingTextRef = useRef(false);
+  isEditingTextRef.current = editingTextId !== null || activeRoomEdit !== null;
   // Keep UIStore flag in sync so App.tsx menu-undo can also block undo during room label edit
   const setEditingRoomLabel = useUIStore((s) => s.setEditingRoomLabel);
   useEffect(() => {
@@ -1043,96 +1049,21 @@ export default function MainCanvas({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFloorId, currentMapId]);
 
-  // ── Keyboard: Delete / Backspace removes selected item or text node ───────
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Delete" && e.key !== "Backspace") return;
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (!selectedId) return;
-      if (texts.some((t) => t.id === selectedId)) {
-        removeText(selectedId);
-        setSelectedId(null);
-      } else if (roomLabels.some((rl) => rl.id === selectedId)) {
-        removeRoomLabel(selectedId);
-        setSelectedId(null);
-      } else if (tool === "route") {
-        // In route mode: remove only the current step waypoint, not the whole operator
-        deleteRouteStep(selectedId, currentRouteStep);
-      } else {
-        removeItem(selectedId);
-        setSelectedId(null);
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [selectedId, tool, currentRouteStep, deleteRouteStep, removeItem, removeText, removeRoomLabel, texts, roomLabels]);
-
-  // ── Keyboard shortcuts for tool switching + route step 1–5 ───────────────
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === "Escape") { setPendingOperator(null); setTool("cursor"); }
-      if (e.key === "v" || e.key === "V") setTool("cursor");
-      if (e.key === "p" || e.key === "P") setTool("pen");
-      if (e.key === "a" || e.key === "A") setTool("arrow");
-      if (e.key === "e" || e.key === "E") setTool("eraser");
-      if (e.key === "t" || e.key === "T") { if (currentView !== "isometric") toggleRoomNames(); return; }
-      if (e.key === "r" || e.key === "R") setTool("route");
-      if (e.key === "x" || e.key === "X") setTool("text");
-      if (e.key === " ") { e.preventDefault(); setIsPlaying(!isPlaying); }
-      // 1–5 jump to route step when route tool is active
-      if (tool === "route" && e.key >= "1" && e.key <= "5") {
-        setCurrentRouteStep(parseInt(e.key) as 1 | 2 | 3 | 4 | 5);
-      }
-      if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
-        if (selectedId) {
-          const itemToCopy = items.find((i) => i.id === selectedId);
-          if (itemToCopy) copiedItemRef.current = JSON.parse(JSON.stringify(itemToCopy));
-        }
-      }
-      if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
-        if (copiedItemRef.current) {
-          const pasted: BoardItem = { ...copiedItemRef.current, id: crypto.randomUUID(), x: copiedItemRef.current.x + 30, y: copiedItemRef.current.y + 30 };
-          addItem(pasted);
-          setSelectedId(pasted.id);
-        }
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === "z") {
-        e.preventDefault();
-        // If the room-label editor is open, close it instead of undoing board state.
-        // Calling undo() while the textarea overlay is mounted can cause a render crash.
-        if (activeRoomEditRef.current) { setActiveRoomEdit(null); return; }
-        undo();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault();
-        if (currentProjectId) {
-          saveCurrentProject().then(() => {
-            showToast("项目已覆盖保存");
-          });
-        } else {
-          setSaveModalName("");
-          setSaveModalOpen(true);
-          setTimeout(() => saveModalInputRef.current?.focus(), 0);
-        }
-      }
-      // Arrow-key canvas pan — 40px per keypress, no React state involved
-      const PAN_STEP = 40;
-      if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight") {
-        e.preventDefault();
-        const stage = stageRef.current;
-        if (!stage) return;
-        const dx = e.key === "ArrowLeft" ? PAN_STEP : e.key === "ArrowRight" ? -PAN_STEP : 0;
-        const dy = e.key === "ArrowUp"   ? PAN_STEP : e.key === "ArrowDown"  ? -PAN_STEP : 0;
-        const newPos = { x: positionRef.current.x + dx, y: positionRef.current.y + dy };
-        positionRef.current = newPos;
-        stage.position(newPos);
-        stage.batchDraw();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [setTool, tool, setCurrentRouteStep, undo, currentProjectId, saveCurrentProject, isPlaying, setIsPlaying, selectedId, items, addItem, toggleRoomNames, currentView]);
+  // ── Keyboard shortcuts (tool switching, delete, undo, copy/paste, pan) ───
+  useCanvasHotkeys({
+    stageRef,
+    positionRef,
+    copiedItemRef,
+    activeRoomEditRef,
+    saveModalInputRef,
+    isEditingTextRef,
+    selectedIdRef,
+    setSelectedId,
+    setActiveRoomEdit,
+    setSaveModalOpen,
+    setSaveModalName,
+    showToast,
+  });
 
   // ── Wheel zoom ─────────────────────────────────────────────────────────────
   // Wheel zoom: bypass React state entirely — write directly to Konva stage.
@@ -1280,45 +1211,29 @@ export default function MainCanvas({
   };
 
   const handleExportProject = () => {
-    const board   = useBoardStore.getState();
-    const canvas  = useCanvasStore.getState();
+    const board  = useBoardStore.getState();
+    const canvas = useCanvasStore.getState();
     const { currentProjectId, projectsList } = useProjectStore.getState();
     const projectName = projectsList.find((p) => p.id === currentProjectId)?.name ?? "Untitled_Project";
-    const sanitizedName = projectName.replace(/[\\/:*?"<>|]/g, "_");
-    const now = Date.now();
-    const mty = {
-      version: "1.0",
-      meta: {
-        id:        currentProjectId ?? crypto.randomUUID(),
-        name:      projectName,
-        mapId:     canvas.currentMapId,
-        updatedAt: now,
+    const mty = generateMtyPayload(
+      currentProjectId,
+      projectName,
+      canvas.currentMapId,
+      {
+        items:           board.items,
+        lines:           board.lines,
+        throwableLines:  board.throwableLines,
+        texts:           board.texts,
+        roomLabels:      board.roomLabels,
+        hiddenOperators: board.hiddenOperators,
+        routeTimeMap:    board.routeTimeMap,
+        videoMarkers:    board.videoMarkers,
+        linkedVideoName: board.videoFileName || null,
       },
-      payload: {
-        boardState: {
-          items:           board.items,
-          lines:           board.lines,
-          throwableLines:  board.throwableLines,
-          texts:           board.texts,
-          roomLabels:      board.roomLabels,
-          hiddenOperators: board.hiddenOperators,
-          routeTimeMap:    board.routeTimeMap,
-          videoMarkers:    board.videoMarkers,
-          linkedVideoName: board.videoFileName || null,
-        },
-        notes:         board.notes,
-        floorId:       canvas.currentFloorId,
-        activeFloorId: canvas.currentFloorId,
-        activePhase:   board.currentPhase,
-      },
-    };
-    const blob = new Blob([JSON.stringify(mty, null, 2)], { type: "application/json" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
-    a.download = `${sanitizedName}.mty`;
-    a.click();
-    URL.revokeObjectURL(url);
+      { currentFloorId: canvas.currentFloorId, activePhase: board.currentPhase },
+      board.notes,
+    );
+    downloadMtyFile(mty, `${sanitizeFileName(projectName)}.mty`);
   };
 
   // 自动从 public/maps/ 加载当前楼层的房间名 JSON

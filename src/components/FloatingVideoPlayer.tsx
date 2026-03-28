@@ -52,9 +52,16 @@ export default function FloatingVideoPlayer() {
   const debugCanvasRef  = useRef<HTMLCanvasElement>(null);
   const abortRef        = useRef(false);
   const exportMenuRef   = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const workerRef       = useRef<any>(null);
 
-  // Abort any running analysis on unmount
-  useEffect(() => { return () => { abortRef.current = true; }; }, []);
+  // Abort any running analysis and release OCR worker on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current = true;
+      workerRef.current?.terminate();
+    };
+  }, []);
 
   // Auto-pause when the player is hidden
   useEffect(() => {
@@ -246,10 +253,13 @@ export default function FloatingVideoPlayer() {
     const offscreen = document.createElement("canvas");
     const ctx       = offscreen.getContext("2d")!;
 
-    const { createWorker } = await import("tesseract.js");
-    const worker = await createWorker("eng");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await worker.setParameters({ tessedit_char_whitelist: "0123456789:" } as any);
+    if (!workerRef.current) {
+      const { createWorker } = await import("tesseract.js");
+      workerRef.current = await createWorker("eng");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await workerRef.current.setParameters({ tessedit_char_whitelist: "0123456789:" } as any);
+    }
+    const worker = workerRef.current;
 
     const videoDuration = v.duration;
 
@@ -592,8 +602,6 @@ export default function FloatingVideoPlayer() {
 
     clearVideoMarkers();
     for (const m of cleanedMarkers) addVideoMarker(m);
-
-    await worker.terminate();
 
     if (!abortRef.current) await seekTo(0);
 
