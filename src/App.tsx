@@ -284,20 +284,27 @@ function App() {
           />
         </div>
 
-        {/* Right resize handle */}
-        {isRightSidebarOpen && (
+        {/* Right panel — outer wrapper owns the width animation and clips both the
+            resize handle and the sidebar. Nothing inside is conditionally unmounted,
+            so the flex layout changes smoothly instead of snapping. */}
+        <div
+          className="flex h-full shrink-0 overflow-hidden"
+          style={{
+            width: isRightSidebarOpen ? rightWidth + 4 : 0,
+            transition: rightTransition,
+          }}
+        >
+          {/* Right resize handle — always in DOM, clipped away when the panel closes */}
           <div
             className="flex-shrink-0 cursor-col-resize z-50 bg-transparent hover:bg-r6-accent transition-colors"
             style={{ width: 4 }}
             onMouseDown={startRightResize}
           />
-        )}
-
-        {/* Right Sidebar */}
-        <RightSidebar
-          width={rightWidth}
-          transition={rightTransition}
-        />
+          <RightSidebar
+            width={rightWidth}
+            transition={rightTransition}
+          />
+        </div>
 
         <SettingsModal />
         <ImportMapModal />

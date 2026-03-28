@@ -425,7 +425,7 @@ export default function RightSidebar({
         isRightSidebarOpen ? "border-l border-r6-border" : "border-none"
       )}
       style={{
-        width: isRightSidebarOpen ? width : 0,
+        width,
         opacity: isRightSidebarOpen ? 1 : 0,
         transition: transition ?? "opacity 200ms ease",
       }}
