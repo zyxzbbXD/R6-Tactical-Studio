@@ -20,7 +20,7 @@ import {
   type ProjectMeta,
 } from "../utils/projectManager";
 import { useBoardStore } from "./useBoardStore";
-import { useCanvasStore } from "./canvasStore";
+import { useCanvasStore, type ViewMode } from "./canvasStore";
 import { useUIStore } from "./useUIStore";
 
 // ─── State shape ─────────────────────────────────────────────────────────────
@@ -64,6 +64,7 @@ interface ProjectState {
       floorId: string | null;
       activeFloorId?: string | null;
       activePhase?: number;
+      activeView?: string;
     };
   }) => Promise<void>;
 }
@@ -177,10 +178,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       } else {
         canvas.setMap("");
       }
+      // Restore the saved view mode (setMapAndFloor resets to "default", so this must come after).
+      if (data.activeView) canvas.setView(data.activeView);
 
       set({ currentProjectId: id, lastSavedAt: data.updatedAt });
       useUIStore.getState().setTool("cursor");
-      console.log(`[ProjectStore] ✓ loadProject complete`);
+      console.log(`[ProjectStore] ✓ loadProject complete view=${data.activeView ?? "default"}`);
     } catch (err) {
       console.error(`[ProjectStore] ❌ loadProject failed for id=${id}:`, err);
     } finally {
@@ -221,6 +224,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         floorId:       canvas.currentFloorId,
         activeFloorId: canvas.currentFloorId,
         activePhase:   board.currentPhase,
+        activeView:    canvas.currentView,
         boardState: {
           items:           board.items,
           lines:           board.lines,
@@ -305,6 +309,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const items0 = (mty.payload.boardState.items[0] as { floorId?: string; phase?: number } | undefined);
       const targetFloor: string | null = mty.payload.activeFloorId ?? mty.payload.floorId ?? items0?.floorId ?? null;
       const targetPhase: number        = mty.payload.activePhase   ?? items0?.phase        ?? 1;
+      const rawView = mty.payload.activeView;
+      const targetView: ViewMode | undefined =
+        rawView === "default" || rawView === "blueprint" || rawView === "isometric"
+          ? rawView : undefined;
 
       // Safe-coerce the imported boardState — old files may lack newer fields
       const rawBs = mty.payload.boardState as Partial<ProjectData["boardState"]> | undefined;
@@ -329,6 +337,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         floorId:       mty.payload.floorId,
         activeFloorId: targetFloor,
         activePhase:   targetPhase,
+        activeView:    targetView,
         boardState,
         notes:         mty.payload.notes ?? "",
         updatedAt:     now,
@@ -348,6 +357,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       if (data.mapId && targetFloor) canvas.setMapAndFloor(data.mapId, targetFloor);
       else if (data.mapId) canvas.setMap(data.mapId);
       else canvas.setMap("");
+      if (data.activeView) canvas.setView(data.activeView);
 
       // 4. Mark as active project
       set({ currentProjectId: id, lastSavedAt: now });
@@ -381,6 +391,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         floorId:       canvas.currentFloorId,
         activeFloorId: canvas.currentFloorId,
         activePhase:   board.currentPhase,
+        activeView:    canvas.currentView,
         boardState: {
           items:           board.items,
           lines:           board.lines,

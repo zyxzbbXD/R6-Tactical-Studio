@@ -27,6 +27,7 @@ import type {
   RoomLabel,
   VideoMarker,
 } from "../store/useBoardStore";
+import type { ViewMode } from "../store/canvasStore";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -62,6 +63,8 @@ export interface ProjectData {
   activeFloorId: string | null;
   /** The phase (1-4) that was active when the project was last saved. */
   activePhase: number;
+  /** The view mode (default/blueprint/isometric) that was active at save time. */
+  activeView?: ViewMode;
   boardState: PersistedBoardState;
   notes: string;
   updatedAt: number; // unix ms
@@ -79,6 +82,8 @@ interface MtyFile {
     activeFloorId: string | null;
     /** Active phase (1-4) at save time — used to restore viewport on load. */
     activePhase: number;
+    /** Active view mode at save time — used to lock the view on load. */
+    activeView?: ViewMode;
   };
 }
 
@@ -157,6 +162,7 @@ export async function saveProject(data: ProjectData): Promise<void> {
       floorId:       data.floorId,
       activeFloorId: data.activeFloorId,
       activePhase:   data.activePhase,
+      activeView:    data.activeView,
     },
   };
 
@@ -216,6 +222,13 @@ export async function loadProject(id: string): Promise<ProjectData | null> {
       videoMarkers:    Array.isArray(bs?.videoMarkers)    ? bs!.videoMarkers!    : [],
       linkedVideoName: typeof bs?.linkedVideoName === "string" ? bs.linkedVideoName : null,
     };
+    // Validate the stored view mode — guard against stale or corrupted values.
+    const storedView = mty.payload.activeView;
+    const activeView: ViewMode | undefined =
+      storedView === "default" || storedView === "blueprint" || storedView === "isometric"
+        ? storedView
+        : undefined;
+
     return {
       id:            mty.meta.id,
       name:          mty.meta.name,
@@ -223,6 +236,7 @@ export async function loadProject(id: string): Promise<ProjectData | null> {
       floorId:       mty.payload.floorId,
       activeFloorId: mty.payload.activeFloorId ?? mty.payload.floorId ?? items?.[0]?.floorId ?? null,
       activePhase:   mty.payload.activePhase   ?? items?.[0]?.phase   ?? 1,
+      activeView,
       boardState,
       notes:         mty.payload.notes ?? "",
       updatedAt:     mty.meta.updatedAt,

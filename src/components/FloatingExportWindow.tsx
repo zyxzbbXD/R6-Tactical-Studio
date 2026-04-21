@@ -64,7 +64,7 @@ export default function FloatingExportWindow() {
         videoMarkers:    board.videoMarkers,
         linkedVideoName: board.videoFileName || null,
       },
-      { currentFloorId: canvas.currentFloorId, activePhase: board.currentPhase },
+      { currentFloorId: canvas.currentFloorId, activePhase: board.currentPhase, activeView: canvas.currentView },
       board.notes,
     );
     downloadMtyFile(mty, `${sanitizeFileName(projectName)}.mty`);

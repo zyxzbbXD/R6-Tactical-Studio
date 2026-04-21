@@ -246,6 +246,9 @@ export default function FloatingVideoPlayer() {
     const localMarkers: { time: number; label: string; color?: string }[] = [];
     // All video timestamps where OCR returned a valid remaining time (used for Prep Phase gate)
     const validHits: number[] = [];
+    // Dynamic Y-offset fallback counter for the WON-banner capture rect.
+    // Tracks consecutive misses so the ROI can shift down when the game UI drifts.
+    let endMatchFailCount = 0;
 
     v.pause();
     setIsPlaying(false);
@@ -330,9 +333,17 @@ export default function FloatingVideoPlayer() {
       const vh = v.videoHeight;
       const bw = Math.floor(vw * 0.30);
       const bh = Math.floor(vh * 0.15);
+
+      // Dynamic Y-offset fallback: after 3 consecutive misses, nudge the capture
+      // rect down by 5% of its own height to compensate for game-UI vertical drift.
+      // A safety cap at 10 resets the counter so the rect never drifts too far.
+      if (endMatchFailCount > 10) endMatchFailCount = 0;
+      const yOffset = endMatchFailCount >= 3 ? Math.floor(bh * 0.05) : 0;
+      const captureY = Math.min(Math.floor(vh * 0.40) + yOffset, vh - bh);
+
       offscreen.width  = bw;
       offscreen.height = bh;
-      ctx.drawImage(v, Math.floor(vw * 0.35), Math.floor(vh * 0.40), bw, bh, 0, 0, bw, bh);
+      ctx.drawImage(v, Math.floor(vw * 0.35), captureY, bw, bh, 0, 0, bw, bh);
 
       // Fast binarize: bright white text → pure black; all other background → pure white.
       // "ROUND WON" renders in white lettering; inversion gives dark-on-light for best Tesseract accuracy.
@@ -355,7 +366,10 @@ export default function FloatingVideoPlayer() {
         v.currentTime = originalTime;
       });
 
-      return /W[O0Q]N/.test(text.toUpperCase().replace(/[\s\n]/g, ""));
+      const wonFound = /W[O0Q]N/.test(text.toUpperCase().replace(/[\s\n]/g, ""));
+      // Close the feedback loop: reset on success, increment on failure
+      if (wonFound) { endMatchFailCount = 0; } else { endMatchFailCount++; }
+      return wonFound;
     };
 
     // Hunt Mode: scan [fromT, toT] at 0.25 s granularity searching for the WON settlement banner.
@@ -679,6 +693,9 @@ export default function FloatingVideoPlayer() {
   // ── Derived ─────────────────────────────────────────────────────────────────
 
   const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
+  // Standard (480 px) is too narrow to show the filename without wrapping.
+  // Collapse to icon-only title bar in that mode.
+  const isSmall = playerSize === "standard";
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -990,7 +1007,10 @@ export default function FloatingVideoPlayer() {
                       <ChevronLeft size={14} />
                     </button>
                     <span
-                      className="text-[12px] rounded-lg px-2 py-0.5 font-medium text-yellow-400"
+                      className={cn(
+                        "text-[12px] rounded-lg px-2 py-0.5 font-medium text-yellow-400",
+                        isSmall ? "truncate max-w-[72px]" : "whitespace-nowrap"
+                      )}
                       style={{
                         background: "rgba(250,204,21,0.12)",
                         border: "1px solid rgba(250,204,21,0.3)",
@@ -1015,7 +1035,8 @@ export default function FloatingVideoPlayer() {
                 onClick={handleAnalyze}
                 disabled={isAnalyzing || !duration}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors border",
+                  "flex items-center rounded-lg text-[13px] font-medium transition-colors border",
+                  isSmall ? "h-8 w-8 justify-center p-0" : "gap-1.5 px-3 py-1.5",
                   isAnalyzing
                     ? "bg-r6-accent-dim text-r6-accent border-r6-accent opacity-70"
                     : "bg-r6-surface-2 text-r6-muted border-r6-border",
@@ -1024,7 +1045,7 @@ export default function FloatingVideoPlayer() {
                 )}
               >
                 <Scan size={14} />
-                {isAnalyzing ? `${analyzeProgress}%` : t("Analyze", language)}
+                {!isSmall && (isAnalyzing ? `${analyzeProgress}%` : t("Analyze", language))}
               </button>
 
               {/* Export FFmpeg script dropdown */}
@@ -1034,14 +1055,15 @@ export default function FloatingVideoPlayer() {
                     title={t("Export Clips", language)}
                     onClick={() => setIsExportMenuOpen((o) => !o)}
                     className={cn(
-                      "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors whitespace-nowrap border",
+                      "flex items-center rounded-lg text-[13px] font-medium transition-colors border",
+                      isSmall ? "h-8 w-8 justify-center p-0" : "gap-1.5 px-3 py-1.5 whitespace-nowrap",
                       isExportMenuOpen
                         ? "bg-r6-accent-dim text-r6-accent border-r6-accent"
                         : "bg-r6-surface-2 text-r6-muted border-r6-border hover:bg-r6-accent-dim hover:text-r6-accent hover:border-r6-accent"
                     )}
                   >
                     <Download size={14} />
-                    {t("Export Clips", language)}
+                    {!isSmall && t("Export Clips", language)}
                   </button>
 
                   {isExportMenuOpen && (

@@ -7,6 +7,7 @@
  */
 
 import type { PersistedBoardState } from "./projectManager";
+import type { ViewMode } from "../store/canvasStore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,7 @@ export interface MtyPayload {
     floorId: string | null;
     activeFloorId: string | null;
     activePhase: number;
+    activeView?: ViewMode;
   };
 }
 
@@ -44,7 +46,7 @@ export function generateMtyPayload(
   projectName: string,
   mapId: string | null,
   boardState: PersistedBoardState,
-  canvasState: { currentFloorId: string | null; activePhase: number },
+  canvasState: { currentFloorId: string | null; activePhase: number; activeView?: ViewMode },
   notes: string,
 ): MtyPayload {
   return {
@@ -61,6 +63,7 @@ export function generateMtyPayload(
       floorId:       canvasState.currentFloorId,
       activeFloorId: canvasState.currentFloorId,
       activePhase:   canvasState.activePhase,
+      activeView:    canvasState.activeView,
     },
   };
 }

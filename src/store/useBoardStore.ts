@@ -116,6 +116,8 @@ export interface TextNode {
   scaleY: number;
   phase: number;
   floorId: string | null;
+  /** Which map view this annotation belongs to. Defaults to '2d' for legacy data. */
+  viewType?: '2d' | '3d';
 }
 
 // Room labels are floor-scoped only (not phase-scoped) — they represent static
@@ -187,6 +189,8 @@ export interface BoardItem {
   phase: number;
   floorId: string | null;  // floor where this token lives
   route: Record<number, Waypoint>; // sparse dict keyed 2–5 (step 1 = base x/y)
+  /** Which map view this token belongs to. Defaults to '2d' for legacy data. */
+  viewType?: '2d' | '3d';
 }
 
 export interface DrawnLine {
@@ -197,6 +201,8 @@ export interface DrawnLine {
   strokeWidth: number;
   phase: number;
   floorId: string | null;
+  /** Which map view this stroke belongs to. Defaults to '2d' for legacy data. */
+  viewType?: '2d' | '3d';
 }
 
 export interface ThrowableLine {
@@ -206,6 +212,8 @@ export interface ThrowableLine {
   strokeWidth: number;
   phase: number;
   floorId: string | null;
+  /** Which map view this throwable trajectory belongs to. Defaults to '2d' for legacy data. */
+  viewType?: '2d' | '3d';
 }
 
 // ─── Store ─────────────────────────────────────────────────────────────────────
@@ -289,7 +297,7 @@ interface BoardState {
   setResizingItemId: (id: string | null) => void;
   setTransformingItemId: (id: string | null) => void;
   setIsPlaying: (v: boolean) => void;
-  addText: (node: Omit<TextNode, "phase" | "floorId">) => void;
+  addText: (node: Omit<TextNode, "phase" | "floorId" | "viewType">) => void;
   updateText: (id: string, updates: Partial<TextNode>) => void;
   removeText: (id: string) => void;
   addRoomLabel: (label: Omit<RoomLabel, "floorId">) => void;
@@ -303,10 +311,10 @@ interface BoardState {
   setIsPlayingTimeline: (v: boolean) => void;
   setRouteTimeMapping: (itemId: string, step: number, rowIndex: number) => void;
   setRouteStepStatus: (itemId: string, step: 1 | 2 | 3 | 4 | 5, status: "normal" | "dead" | "planting") => void;
-  addItem: (item: Omit<BoardItem, "phase" | "route" | "scale" | "floorId">) => void;
+  addItem: (item: Omit<BoardItem, "phase" | "route" | "scale" | "floorId" | "viewType">) => void;
   updateItem: (id: string, updates: Partial<BoardItem>) => void;
   removeItem: (id: string) => void;
-  addLine: (line: Omit<DrawnLine, "phase" | "floorId">) => void;
+  addLine: (line: Omit<DrawnLine, "phase" | "floorId" | "viewType">) => void;
   removeLine: (id: string) => void;
   addThrowableLine: (line: Pick<ThrowableLine, "id" | "points">) => void;
   removeThrowableLine: (id: string) => void;
@@ -404,8 +412,9 @@ export const useBoardStore = create<BoardState>()(
 
       addText: (node) =>
         set((s) => {
-          const floorId = useCanvasStore.getState().currentFloorId;
-          return { texts: [...s.texts, { ...node, phase: s.currentPhase, floorId }] };
+          const { currentFloorId: floorId, currentView } = useCanvasStore.getState();
+          const viewType: '2d' | '3d' = currentView === "isometric" ? "3d" : "2d";
+          return { texts: [...s.texts, { ...node, phase: s.currentPhase, floorId, viewType }] };
         }),
       updateText: (id, updates) =>
         set((s) => ({
@@ -450,7 +459,8 @@ export const useBoardStore = create<BoardState>()(
 
       addItem: (item) =>
         set((s) => {
-          const floorId = useCanvasStore.getState().currentFloorId;
+          const { currentFloorId: floorId, currentView } = useCanvasStore.getState();
+          const viewType: '2d' | '3d' = currentView === "isometric" ? "3d" : "2d";
           // Enforce uniqueness: same operatorId may not appear twice in the same phase
           if (item.side !== "neutral") {
             const alreadyExists = s.items.some(
@@ -466,7 +476,7 @@ export const useBoardStore = create<BoardState>()(
             if (count >= 5) return {}; // silently reject
           }
           return {
-            items: [...s.items, { ...item, phase: s.currentPhase, route: {}, scale: 3, floorId }],
+            items: [...s.items, { ...item, phase: s.currentPhase, route: {}, scale: 3, floorId, viewType }],
             routeTimeMap: {
               ...s.routeTimeMap,
               [item.id]: { 1: getDefaultRowForStep(s.currentPhase, 1) },
@@ -491,8 +501,9 @@ export const useBoardStore = create<BoardState>()(
 
       addLine: (line) =>
         set((s) => {
-          const floorId = useCanvasStore.getState().currentFloorId;
-          return { lines: [...s.lines, { ...line, phase: s.currentPhase, floorId }] };
+          const { currentFloorId: floorId, currentView } = useCanvasStore.getState();
+          const viewType: '2d' | '3d' = currentView === "isometric" ? "3d" : "2d";
+          return { lines: [...s.lines, { ...line, phase: s.currentPhase, floorId, viewType }] };
         }),
 
       removeLine: (id) =>
@@ -501,12 +512,13 @@ export const useBoardStore = create<BoardState>()(
       // Color/size injected from useUIStore so this module stays free of UI state
       addThrowableLine: ({ id, points }) =>
         set((s) => {
-          const floorId = useCanvasStore.getState().currentFloorId;
+          const { currentFloorId: floorId, currentView } = useCanvasStore.getState();
           const { throwableColor, throwableSize } = useUIStore.getState();
+          const viewType: '2d' | '3d' = currentView === "isometric" ? "3d" : "2d";
           return {
             throwableLines: [
               ...s.throwableLines,
-              { id, points, color: throwableColor, strokeWidth: throwableSize, phase: s.currentPhase, floorId },
+              { id, points, color: throwableColor, strokeWidth: throwableSize, phase: s.currentPhase, floorId, viewType },
             ],
           };
         }),

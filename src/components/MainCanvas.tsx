@@ -191,12 +191,12 @@ function Divider() {
 }
 
 function Dropdown<T extends string>({
-  value, placeholder, items, onChange, icon: Icon, minWidth = 140,
+  value, placeholder, items, onChange, icon: Icon, minWidth = 140, disabled = false,
 }: {
   value: T | null; placeholder: string;
   items: { id: T; label: string }[];
   onChange: (id: T) => void;
-  icon?: React.ElementType; minWidth?: number;
+  icon?: React.ElementType; minWidth?: number; disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -214,10 +214,13 @@ function Dropdown<T extends string>({
   return (
     <div ref={ref} className="relative shrink-0">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => !disabled && setOpen(!open)}
+        disabled={disabled}
+        title={disabled ? "视图已被项目锁定" : undefined}
         className={cn(
           "flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[14px] font-medium bg-r6-surface-2 border border-r6-border",
-          value ? "text-r6-text" : "text-r6-muted"
+          value ? "text-r6-text" : "text-r6-muted",
+          disabled && "opacity-40 cursor-not-allowed"
         )}
         style={{ minWidth }}
       >
@@ -857,6 +860,8 @@ export default function MainCanvas({
   // Render-scale compensation: keeps strokes and operator icons visually consistent
   // regardless of bpScale.  Isometric view additionally shrinks tokens to 40 % of normal.
   const renderScaleFactor = (currentView === "isometric" ? 0.4 : 1.0) / bpScale;
+  // Items/lines stamped with viewType '3d' only show in isometric; everything else shows in 2D views.
+  const activeViewType: '2d' | '3d' = currentView === "isometric" ? "3d" : "2d";
   // Shared Konva transform applied to BOTH the image layer and the items Group.
   const bpTransformProps = isStandardBp
     ? { x: 3200, y: 1800, offsetX: bpOffsetX, offsetY: bpOffsetY, scaleX: bpScale, scaleY: bpScale }
@@ -1078,9 +1083,12 @@ export default function MainCanvas({
       const cur      = scaleRef.current;
       const dir      = e.evt.deltaY < 0 ? 1 : -1;
       const newScale = Math.min(Math.max(cur * (dir > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR), ZOOM_MIN), ZOOM_MAX);
+      // Always read the live stage position rather than positionRef, which can be
+      // stale when the stage is mid-drag (positionRef is only flushed in onDragEnd).
+      const livePos  = stage.position();
       const newPos   = {
-        x: ptr.x - (ptr.x - positionRef.current.x) * (newScale / cur),
-        y: ptr.y - (ptr.y - positionRef.current.y) * (newScale / cur),
+        x: ptr.x - (ptr.x - livePos.x) * (newScale / cur),
+        y: ptr.y - (ptr.y - livePos.y) * (newScale / cur),
       };
       scaleRef.current    = newScale;
       positionRef.current = newPos;
@@ -1230,7 +1238,7 @@ export default function MainCanvas({
         videoMarkers:    board.videoMarkers,
         linkedVideoName: board.videoFileName || null,
       },
-      { currentFloorId: canvas.currentFloorId, activePhase: board.currentPhase },
+      { currentFloorId: canvas.currentFloorId, activePhase: board.currentPhase, activeView: canvas.currentView },
       board.notes,
     );
     downloadMtyFile(mty, `${sanitizeFileName(projectName)}.mty`);
@@ -1424,8 +1432,8 @@ export default function MainCanvas({
       {/* Layer 1 — operator tokens + drawings, co-transformed with the map image */}
       <Layer>
         <KonvaGroup {...bpTransformProps}>
-        {/* Committed lines — filtered to current phase and floor */}
-        {lines.filter((l) => l.phase === currentPhase && l.floorId === currentFloorId).map((ln) =>
+        {/* Committed lines — filtered to current phase, floor, and view type */}
+        {lines.filter((l) => l.phase === currentPhase && l.floorId === currentFloorId && (l.viewType ?? "2d") === activeViewType).map((ln) =>
           ln.type === "arrow" ? (
             <Arrow key={ln.id}
               points={ln.points}
@@ -1455,7 +1463,7 @@ export default function MainCanvas({
         )}
 
         {/* Throwable trajectories — dashed parabolas (color/width stored per-line) */}
-        {throwableLines.filter((l) => l.phase === currentPhase && l.floorId === currentFloorId).map((tl) => (
+        {throwableLines.filter((l) => l.phase === currentPhase && l.floorId === currentFloorId && (l.viewType ?? "2d") === activeViewType).map((tl) => (
           <Line key={tl.id}
             points={tl.points}
             stroke={tl.color}
@@ -1473,6 +1481,7 @@ export default function MainCanvas({
         {/* Operator movement routes — floor-aware: only draw segments on the current floor */}
         {!isExportingGif && items
           .filter((i) => i.phase === currentPhase && Object.keys(i.route).length > 0)
+          .filter((i) => (i.viewType ?? "2d") === activeViewType)
           .filter((i) => !hiddenOperators.includes(i.id))
           .map((item) => {
           const eff            = getEffectiveRoute(item);
@@ -1569,7 +1578,7 @@ export default function MainCanvas({
 
         {/* Text annotations */}
         {texts
-          .filter((tn) => tn.phase === currentPhase && tn.floorId === currentFloorId)
+          .filter((tn) => tn.phase === currentPhase && tn.floorId === currentFloorId && (tn.viewType ?? "2d") === activeViewType)
           .map((tn) => (
             <KonvaText
               key={tn.id}
@@ -1774,6 +1783,7 @@ export default function MainCanvas({
               onChange={(id) => setView(id)}
               icon={ImageIcon}
               minWidth={108}
+              disabled={!!currentProjectId}
             />
             {/* Blueprint scale mode toggle — always in blueprint view; in default view only after blueprint center has been computed */}
             {(currentView === "blueprint" || (currentView === "default" && blueprintCenter !== null)) && (
@@ -2032,6 +2042,13 @@ export default function MainCanvas({
               width={containerSize.width}
               height={containerSize.height}
               draggable={isPannable}
+              onDragMove={() => {
+                // Keep positionRef in sync imperatively so handleWheel always
+                // uses the correct position even while a drag is in progress.
+                // No React setState — purely imperative to avoid fighting Konva's RAF loop.
+                const s = stageRef.current;
+                if (s) positionRef.current = s.position();
+              }}
               onDragEnd={() => {
                 const s = stageRef.current;
                 if (s) positionRef.current = s.position();
@@ -2064,6 +2081,7 @@ export default function MainCanvas({
                     );
                     return items
                       .filter((i) => i.phase === currentPhase)
+                      .filter((i) => (i.viewType ?? "2d") === activeViewType)
                       .filter((i) => !hiddenOperators.includes(i.id))
                       .filter((i) => !isExportingGif || exportVisibility === "all" || i.side === "neutral" || i.side === exportVisibility)
                       .map((item) => (

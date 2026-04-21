@@ -1,4 +1,4 @@
-# 🎯 R6 Tactical Studio (v0.2.2)
+# 🎯 R6 Tactical Studio (v0.2.4)
 
 🌍 [简体中文](./README.md) | [English](./docs/README_EN.md) | [日本語](./docs/README_JA.md)
 
@@ -26,7 +26,7 @@
 
 ---
 
-## 3. v0.2.1 核心功能速览
+## 3. v0.2.x 核心功能速览
 
 ### 🗺️ 多视角多图层画板
 * **全景视角**：支持标准、蓝图（Blueprint）、3D视角三种观察视角。

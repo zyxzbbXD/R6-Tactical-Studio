@@ -185,7 +185,7 @@ export default function RightSidebar({
   const language = useSettingsStore((s) => s.language);
 
   // ── Canvas / board state ────────────────────────────────────────────────────
-  const { currentFloorId } = useCanvasStore(useShallow((s) => ({ currentFloorId: s.currentFloorId })));
+  const { currentFloorId, currentView } = useCanvasStore(useShallow((s) => ({ currentFloorId: s.currentFloorId, currentView: s.currentView })));
 
   const {
     items,
@@ -243,8 +243,10 @@ export default function RightSidebar({
     phaseTokens: Record<number, string>; // phase → item.id
   };
   const columnOps = useMemo((): Array<ColOp | null> => {
+    const activeViewType: '2d' | '3d' = currentView === "isometric" ? "3d" : "2d";
     const uniqueOps = new Map<string, ColOp>();
     for (const item of items) {
+      if ((item.viewType ?? "2d") !== activeViewType) continue;
       if (item.side === timelineSide) {
         let opData = uniqueOps.get(item.operatorId);
         if (!opData) {
@@ -260,7 +262,7 @@ export default function RightSidebar({
     }
     const sliced = sideItems.slice(0, 5);
     return Array.from({ length: 5 }, (_, i) => sliced[i] ?? null);
-  }, [items, timelineSide]);
+  }, [items, timelineSide, currentView]);
 
   // Every row is mapped to a tactical phase so the canvas always stays in sync.
   // Row 0 is included so looping back restores phase 1.
